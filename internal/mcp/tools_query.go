@@ -38,7 +38,7 @@ func (s *Server) registerSearchContacts() {
 		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(false),
 	)
-	s.mcp.AddTool(tool, mcp.NewTypedToolHandler(func(ctx context.Context, _ mcp.CallToolRequest, a searchContactsArgs) (*mcp.CallToolResult, error) {
+	s.addTool(tool, mcp.NewTypedToolHandler(func(ctx context.Context, _ mcp.CallToolRequest, a searchContactsArgs) (*mcp.CallToolResult, error) {
 		contacts, err := s.client.Store().SearchContacts(ctx, a.Query)
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
@@ -80,7 +80,7 @@ func (s *Server) registerListMessages() {
 		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(false),
 	)
-	s.mcp.AddTool(tool, mcp.NewTypedToolHandler(func(ctx context.Context, _ mcp.CallToolRequest, a listMessagesArgs) (*mcp.CallToolResult, error) {
+	s.addTool(tool, mcp.NewTypedToolHandler(func(ctx context.Context, _ mcp.CallToolRequest, a listMessagesArgs) (*mcp.CallToolResult, error) {
 		// Clamp parameters to server-side upper bounds.
 		limit := a.Limit
 		if limit > 100 {
@@ -149,7 +149,7 @@ func (s *Server) registerListChats() {
 		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(false),
 	)
-	s.mcp.AddTool(tool, mcp.NewTypedToolHandler(func(ctx context.Context, _ mcp.CallToolRequest, a listChatsArgs) (*mcp.CallToolResult, error) {
+	s.addTool(tool, mcp.NewTypedToolHandler(func(ctx context.Context, _ mcp.CallToolRequest, a listChatsArgs) (*mcp.CallToolResult, error) {
 		sortBy := a.SortBy
 		if sortBy == "" {
 			sortBy = "last_active"
@@ -180,7 +180,7 @@ func (s *Server) registerGetChat() {
 		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(false),
 	)
-	s.mcp.AddTool(tool, mcp.NewTypedToolHandler(func(ctx context.Context, _ mcp.CallToolRequest, a getChatArgs) (*mcp.CallToolResult, error) {
+	s.addTool(tool, mcp.NewTypedToolHandler(func(ctx context.Context, _ mcp.CallToolRequest, a getChatArgs) (*mcp.CallToolResult, error) {
 		include := a.IncludeLastMessage == nil || *a.IncludeLastMessage
 		chat, err := s.client.Store().GetChat(ctx, a.ChatJID, include)
 		if err != nil {
@@ -212,7 +212,7 @@ func (s *Server) registerGetMessageContext() {
 		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(false),
 	)
-	s.mcp.AddTool(tool, mcp.NewTypedToolHandler(func(ctx context.Context, _ mcp.CallToolRequest, a getMessageContextArgs) (*mcp.CallToolResult, error) {
+	s.addTool(tool, mcp.NewTypedToolHandler(func(ctx context.Context, _ mcp.CallToolRequest, a getMessageContextArgs) (*mcp.CallToolResult, error) {
 		before, after := a.Before, a.After
 		if before <= 0 {
 			before = 5
@@ -243,7 +243,7 @@ func (s *Server) registerIsOnWhatsApp() {
 		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(true),
 	)
-	s.mcp.AddTool(tool, mcp.NewTypedToolHandler(func(ctx context.Context, req mcp.CallToolRequest, a isOnWhatsAppArgs) (*mcp.CallToolResult, error) {
+	s.addTool(tool, mcp.NewTypedToolHandler(func(ctx context.Context, req mcp.CallToolRequest, a isOnWhatsAppArgs) (*mcp.CallToolResult, error) {
 		if len(a.Phones) == 0 {
 			return mcp.NewToolResultError("phones must not be empty"), nil
 		}
@@ -260,22 +260,27 @@ func (s *Server) registerIsOnWhatsApp() {
 
 func (s *Server) registerGetStatus() {
 	tool := mcp.NewTool("get_status",
-		mcp.WithDescription("Report whether the embedded WhatsApp bridge is connected and which account it is paired with. Read-only; no side effects. Call this first when other tools fail with auth or connection errors. Returns a JSON object `{connected, paired, own_jid?, own_phone?, hint?}` — `hint` includes the URL of the local pairing UI when not yet paired."),
+		mcp.WithDescription("Report whether the embedded WhatsApp bridge is connected and which account it is paired with. Read-only; no side effects. Call this first when other tools fail with auth or connection errors. Returns a JSON object `{connected, paired, read_only, own_jid?, own_phone?, hint?}` — `read_only` is true when the operator started the server in read-only mode (send and action tools are not registered); `hint` includes the URL of the local pairing UI when not yet paired."),
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(false),
 	)
-	s.mcp.AddTool(tool, func(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		status := map[string]any{
-			"connected": s.client.IsConnected(),
+	s.addTool(tool, func(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		status := map[string]any{"read_only": s.readOnly}
+		// A nil client (tests, smoke) reports disconnected and unpaired.
+		connected, paired := false, false
+		if s.client != nil {
+			connected = s.client.IsConnected()
+			if wa := s.client.WA(); wa != nil && wa.Store != nil && wa.Store.ID != nil {
+				status["own_jid"] = wa.Store.ID.String()
+				status["own_phone"] = wa.Store.ID.User
+				paired = true
+			}
 		}
-		if wa := s.client.WA(); wa != nil && wa.Store != nil && wa.Store.ID != nil {
-			status["own_jid"] = wa.Store.ID.String()
-			status["own_phone"] = wa.Store.ID.User
-			status["paired"] = true
-		} else {
-			status["paired"] = false
+		status["connected"] = connected
+		status["paired"] = paired
+		if !paired {
 			status["hint"] = "Not paired. Open /pair on this server in a browser to scan QR (default: http://127.0.0.1:8765/pair)."
 		}
 		return resultJSON(status)
@@ -299,7 +304,7 @@ func (s *Server) registerPairingStatus() {
 		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(false),
 	)
-	s.mcp.AddTool(tool, func(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	s.addTool(tool, func(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		var ownJID, ownPhone string
 		ready := false
 		// Short-circuits before touching s.client unless we are paired, so a

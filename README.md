@@ -109,6 +109,17 @@ Paths outside the root, including symlinks that resolve outside it, are rejected
 - `WHATSAPP_MCP_MEDIA_ROOT`: the file allowlist root above.
 - `WHATSAPP_MCP_DEBUG=1` or `-debug`: verbose logs (see [Debug logging](#debug-logging)).
 - `-full-history`, `-history-days N`, `-history-size-mb N` (env `WHATSAPP_MCP_FULL_HISTORY`, `WHATSAPP_MCP_HISTORY_DAYS`, `WHATSAPP_MCP_HISTORY_SIZE_MB`): how much history to ask for when pairing through `/pair` (see [Full history at pairing](#full-history-at-pairing)).
+- `-read-only` (env `WHATSAPP_MCP_READ_ONLY=1` or `true`): register only tools that cannot change anything on WhatsApp (see [Read-only mode](#read-only-mode)). The flag wins over the env var; an unparseable value stops `serve`.
+
+### Read-only mode
+
+`serve -read-only` registers 14 of the 42 tools. Use it for archive and search deployments, or to limit what a prompt-injected agent can do through this server (see [Limitations](#limitations)).
+
+- **Kept:** the local-cache reads (`search_contacts`, `list_messages`, `list_chats`, `get_chat`, `get_message_context`, `get_poll_results`), `get_status`, `pairing_status`, live reads of your own account (`list_groups`, `get_group_info`, `get_blocklist`, `get_privacy_settings`), `download_media` (fetches an attachment you already received; the sender is not notified) and `request_sync` (asks your own phone for older history). The `whatsapp://media/...` resource stays as well.
+- **Not registered:** every tool that sends, reacts, replies, edits, deletes, marks read, shows typing or presence, or changes groups, privacy, blocklist or the profile; `is_on_whatsapp` (asks WhatsApp about arbitrary phone numbers); `get_group_invite_link` (`reset` revokes the link, and the link itself lets anyone join).
+- `get_status` reports `read_only: true`, and the server's MCP instructions say that send tools are disabled.
+- Nothing is sent on your behalf: the bridge never marks itself online and sends read receipts only from `mark_read`, `mark_chat_read` and the send tools. whatsmeow still acknowledges incoming messages with protocol delivery receipts, as every linked device does; while offline these are "inactive" receipts that WhatsApp apps do not show as ticks.
+- `/pair` stays available, including its reset (logout) button, because re-pairing needs it. Protect it with `WHATSAPP_MCP_TOKEN` when `-allow-remote` is on.
 
 ## Running the daemon
 
@@ -239,7 +250,7 @@ Intentionally not exposed yet:
 
 ## Limitations
 
-- **Prompt-injection risk:** as with many MCP servers, this one is subject to [the lethal trifecta](https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/). Prompt injection in incoming messages could lead to private data exfiltration — treat the tool surface accordingly.
+- **Prompt-injection risk:** as with many MCP servers, this one is subject to [the lethal trifecta](https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/). Prompt injection in incoming messages could lead to private data exfiltration — treat the tool surface accordingly. [Read-only mode](#read-only-mode) removes every tool that can send or act, so this server offers no outbound channel (the agent's other tools still might).
 - **Message gaps:** see [Running the daemon](#running-the-daemon).
 - **Single instance per store:** only one `whatsapp-mcp serve` can hold the store lock. Parallel MCP clients must point at different `-store` directories (and therefore different paired sessions).
 - **Windows:** requires CGO and a C compiler — see [docs/windows.md](docs/windows.md).

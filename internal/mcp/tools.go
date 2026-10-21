@@ -10,6 +10,9 @@ package mcp
 //   - tools_media.go   — polls + contact cards
 //   - tools_privacy.go — blocklist, presence, privacy settings, status message
 //
+// Every tool is registered through s.addTool (readonly.go), which skips tools
+// not classified keepInReadOnly when the server runs in read-only mode.
+//
 // Shared helpers live in tools_core.go (parseTimestamp, normalizeRecipientToChatJID,
 // maybeMarkChatRead). Common result helpers live in result.go.
 func (s *Server) registerTools() {
