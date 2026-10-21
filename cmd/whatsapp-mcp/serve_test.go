@@ -1,6 +1,16 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/sealjay/mcp-whatsapp/internal/client"
+)
+
+// The daemon's /readyz reads connection state through the driver; without
+// this method it would report "unknown" forever.
+var _ interface {
+	ConnectionStatus() client.ConnectionStatus
+} = (*productionDriver)(nil)
 
 func TestIsLoopbackAddr(t *testing.T) {
 	cases := map[string]bool{

@@ -35,5 +35,13 @@ RUN mkdir -p /home/app/store
 EXPOSE 8765
 VOLUME ["/home/app/store"]
 
+# Liveness only (/healthz): an unpaired or reconnecting daemon still serves
+# /pair, so it counts as healthy. Probes WHATSAPP_MCP_ADDR (0.0.0.0 becomes
+# 127.0.0.1; default 127.0.0.1:8765), so set that env var rather than -addr
+# when changing the port.
+# For a connection-aware check use `whatsapp-mcp healthcheck -ready` (/readyz).
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD ["whatsapp-mcp", "healthcheck"]
+
 ENTRYPOINT ["whatsapp-mcp", "-store", "/home/app/store"]
 CMD ["serve"]
