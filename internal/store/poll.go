@@ -27,7 +27,9 @@ func (s *Store) StorePollMetadata(ctx context.Context, messageID, chatJID string
 		return fmt.Errorf("marshal poll options: %w", err)
 	}
 	if _, err := s.db.ExecContext(ctx,
-		"UPDATE messages SET poll_options_json = ? WHERE id = ? AND chat_jid = ?",
+		// A poll deleted for everyone keeps its options cleared when history
+		// sync delivers its creation message again.
+		"UPDATE messages SET poll_options_json = ? WHERE id = ? AND chat_jid = ? AND revoked_at IS NULL",
 		string(payload), messageID, chatJID,
 	); err != nil {
 		return fmt.Errorf("update poll_options_json: %w", err)
