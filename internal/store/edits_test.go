@@ -167,7 +167,10 @@ func TestApplyRevoke_ClearsContent(t *testing.T) {
 		Timestamp: editTS, MediaType: "document", Filename: "secret.pdf"}, []byte{1}, nil, nil, 42); err != nil {
 		t.Fatalf("re-store: %v", err)
 	}
-	if r := readEditRow(t, s, "e-media"); r.content != "" || r.mediaType != "" || !r.revokedAt.Valid {
+	if err := s.StorePollMetadata(ctx, "e-media", editChat, []string{"x"}); err != nil {
+		t.Fatalf("re-store poll metadata: %v", err)
+	}
+	if r := readEditRow(t, s, "e-media"); r.content != "" || r.mediaType != "" || !r.revokedAt.Valid || r.pollOptions.Valid {
 		t.Errorf("re-delivered revoked row = %+v, want it to stay revoked and cleared", r)
 	}
 }
