@@ -85,7 +85,7 @@ func newGatedHandler() *gatedHandler {
 	return &gatedHandler{release: make(chan struct{}), started: make(chan autoDownloadJob, 64)}
 }
 
-func (h *gatedHandler) handle(ctx context.Context, job autoDownloadJob) {
+func (h *gatedHandler) handle(ctx context.Context, job autoDownloadJob) autoDownloadOutcome {
 	h.mu.Lock()
 	h.seen = append(h.seen, job)
 	h.running++
@@ -106,6 +106,10 @@ func (h *gatedHandler) handle(ctx context.Context, job autoDownloadJob) {
 	h.mu.Lock()
 	h.running--
 	h.mu.Unlock()
+	if ctx.Err() != nil {
+		return autoDownloadSkipped
+	}
+	return autoDownloadDone
 }
 
 func (h *gatedHandler) waitStarted(t *testing.T) autoDownloadJob {

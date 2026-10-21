@@ -61,6 +61,8 @@ type Client struct {
 	conn             connTracker
 	autoDownload     *autoDownloader // nil unless StartAutoDownload enabled it
 	keepRevoked      bool
+	// autoDownloadBackfill schedules backfill passes; set with autoDownload.
+	autoDownloadBackfill *backfillScheduler
 }
 
 // New constructs a Client. It sets the latest WhatsApp version best-effort,
