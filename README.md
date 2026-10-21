@@ -98,7 +98,7 @@ Restart the client. The daemon outlives client restarts.
 
 Paths outside the root, including symlinks that resolve outside it, are rejected. Anything inside the root is readable and writable by the tools, so keep secrets out.
 
-**Automatic download.** WhatsApp's CDN keeps media only for a limited time; after that `download_media` fails with HTTP 403, 404 or 410. To keep the files, run `serve -auto-download image,video,audio,document` (or `all`, or any subset): media of those types is downloaded as messages arrive, live or through history sync, into the same cache `download_media` reads, so a later `download_media` returns the cached file without fetching it again. Files whose declared size exceeds `-auto-download-max-mb` (default 25 MiB, above the 16 MB WhatsApp has long applied to ordinary photos, videos and voice notes; `0` removes the limit) are skipped. Two background workers do the downloads from a queue of 4096; if the queue is full, for example during a large history sync, further media is skipped with a warning and can still be fetched with `download_media`. Media WhatsApp no longer has, common for older history, is logged once, recorded in `messages.db` and never retried automatically. Stickers are not stored, so they cannot be selected.
+**Automatic download.** WhatsApp's CDN keeps media only for a limited time; after that `download_media` fails with HTTP 403, 404 or 410. To keep the files, run `serve -auto-download image,video,audio,document` (or `all`, or any subset): media of those types is downloaded as messages arrive, live or through history sync, into the same cache `download_media` reads, so a later `download_media` returns the cached file without fetching it again. Files whose declared size exceeds `-auto-download-max-mb` (default 25 MiB, above the 16 MB WhatsApp has long applied to ordinary photos, videos and voice notes; `0` removes the limit) are skipped. Two background workers do the downloads from a queue of 4096; if the queue is full, for example during a large history sync, further media is skipped with a warning and can still be fetched with `download_media`. Media WhatsApp no longer has, common for older history, is logged once, recorded in `messages.db` and never retried automatically. Media of messages deleted for everyone is not downloaded, and a file fetched while its message was being deleted is removed, unless `serve` runs with `-keep-revoked`. Stickers are not stored, so they cannot be selected.
 
 **Sandboxed clients (Claude Cowork and similar)** cannot read the daemon's cache. Point `WHATSAPP_MCP_MEDIA_ROOT` at a directory the sandbox can read and give the client this instruction:
 
@@ -111,6 +111,7 @@ Paths outside the root, including symlinks that resolve outside it, are rejected
 - `WHATSAPP_MCP_MEDIA_ROOT`: the file allowlist root above.
 - `-auto-download TYPES` (env `WHATSAPP_MCP_AUTO_DOWNLOAD`, default off): media types to download automatically, see [Automatic download](#sending-and-receiving-files).
 - `-auto-download-max-mb N` (env `WHATSAPP_MCP_AUTO_DOWNLOAD_MAX_MB`, default `25`): size cap in MiB for automatic downloads; `0` means no limit.
+- `-keep-revoked` (env `WHATSAPP_MCP_KEEP_REVOKED=1`): keep the text and media of cached messages that are deleted for everyone. By default the cache records the deletion and clears them (see [Edits and deletions](#edits-and-deletions)).
 - `WHATSAPP_MCP_DEBUG=1` or `-debug`: verbose logs (see [Debug logging](#debug-logging)).
 - `-full-history`, `-history-days N`, `-history-size-mb N` (env `WHATSAPP_MCP_FULL_HISTORY`, `WHATSAPP_MCP_HISTORY_DAYS`, `WHATSAPP_MCP_HISTORY_SIZE_MB`): how much history to ask for when pairing through `/pair` (see [Full history at pairing](#full-history-at-pairing)).
 - `-read-only` (env `WHATSAPP_MCP_READ_ONLY=1` or `true`): register only tools that cannot change anything on WhatsApp (see [Read-only mode](#read-only-mode)). The flag wins over the env var; an unparseable value stops `serve`.
@@ -124,6 +125,14 @@ Paths outside the root, including symlinks that resolve outside it, are rejected
 - `get_status` reports `read_only: true`, and the server's MCP instructions say that send tools are disabled.
 - Nothing is sent on your behalf: the bridge never marks itself online and sends read receipts only from `mark_read`, `mark_chat_read` and the send tools. whatsmeow still acknowledges incoming messages with protocol delivery receipts, as every linked device does; while offline these are "inactive" receipts that WhatsApp apps do not show as ticks.
 - `/pair` stays available, including its reset (logout) button, because re-pairing needs it. Protect it with `WHATSAPP_MCP_TOKEN` when `-allow-remote` is on.
+
+### Edits and deletions
+
+The cache follows edits and deletions for everyone, whether they arrive live, in history sync, or are made through `edit_message` / `delete_message`:
+
+- **Edits** replace the cached text (or media caption) and keep the message's ID and timestamp. `list_messages` marks the row `[edited]` and searches match the new text.
+- **Deletions for everyone** mark the row deleted: `list_messages` shows `[deleted]`, and the text, media fields and any copy `download_media` cached in the store directory are removed, so searches no longer match it. Start `serve` with `-keep-revoked` to keep the text and media (shown after the `[deleted]` marker) instead. Copies written to an `output_path` are left alone.
+- Only the original sender's edits and deletions are applied; a deletion of someone else's message is applied only in a group, from an admin. Edits and deletions of messages that are not cached are ignored.
 
 ## Running the daemon
 

@@ -496,3 +496,61 @@ func TestHandleMessage_QueuesAutoDownload(t *testing.T) {
 		t.Fatalf("queued job = %+v, want %+v", job, want)
 	}
 }
+
+// A message deleted for everyone before its queued auto-download runs is
+// skipped: its media is cleared, so there is nothing to fetch or record.
+func TestRunAutoDownload_SkipsRevokedMessage(t *testing.T) {
+	c, s, job, cachePath := seedAutoDownloadMessage(t, []byte("JPEG-BYTES"))
+	var calls atomic.Int32
+	c.downloadMedia = func(context.Context, whatsmeow.DownloadableMessage) ([]byte, error) {
+		calls.Add(1)
+		return []byte("JPEG-BYTES"), nil
+	}
+	if _, err := c.revoke(context.Background(), job.chatJID, job.messageID, store.Author{Senders: []string{job.chatJID}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	c.runAutoDownload(context.Background(), job)
+	if n := calls.Load(); n != 0 {
+		t.Fatalf("media fetched %d times for a revoked message, want 0", n)
+	}
+	if _, err := os.Stat(cachePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("cache file for revoked message: stat err = %v, want not exist", err)
+	}
+	if failed, err := s.HasAutoDownloadFailure(context.Background(), job.messageID, job.chatJID); err != nil || failed {
+		t.Fatalf("HasAutoDownloadFailure = %v, %v; want false (skipped, not failed)", failed, err)
+	}
+}
+
+// A revoke that lands while the media is being fetched must not leave the
+// file behind. The fake fetch revokes the message and then recreates the
+// cache directory, as when the revoke lands after Download read the media
+// fields but before it created the directory. With -keep-revoked the file is
+// kept.
+func TestRunAutoDownload_RevokeDuringFetch(t *testing.T) {
+	for _, keep := range []bool{false, true} {
+		t.Run(fmt.Sprintf("keepRevoked=%v", keep), func(t *testing.T) {
+			payload := []byte("JPEG-BYTES")
+			c, _, job, cachePath := seedAutoDownloadMessage(t, payload)
+			c.keepRevoked = keep
+			c.downloadMedia = func(ctx context.Context, _ whatsmeow.DownloadableMessage) ([]byte, error) {
+				if _, err := c.revoke(ctx, job.chatJID, job.messageID, store.Author{Senders: []string{job.chatJID}}, time.Now()); err != nil {
+					t.Error(err)
+				}
+				if err := os.MkdirAll(filepath.Dir(cachePath), 0o700); err != nil {
+					t.Error(err)
+				}
+				return payload, nil
+			}
+
+			c.runAutoDownload(context.Background(), job)
+			_, err := os.Stat(cachePath)
+			if keep && err != nil {
+				t.Fatalf("keepRevoked: cache file missing: %v", err)
+			}
+			if !keep && !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("cache file of message revoked during fetch: stat err = %v, want not exist", err)
+			}
+		})
+	}
+}

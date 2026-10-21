@@ -27,6 +27,7 @@ func runServe(storeDir string, redactor *security.Redactor, args []string) int {
 		addr              string
 		allowRemote       bool
 		readOnly          bool
+		keepRevoked       bool
 		autoDownload      string
 		autoDownloadMaxMB int
 	)
@@ -37,6 +38,7 @@ func runServe(storeDir string, redactor *security.Redactor, args []string) int {
 	var historyFlags pairingHistoryFlags
 	historyFlags.register(fs)
 	fs.BoolVar(&readOnly, "read-only", false, "register only MCP tools that cannot change anything on WhatsApp (env WHATSAPP_MCP_READ_ONLY)")
+	fs.BoolVar(&keepRevoked, "keep-revoked", false, "keep the text and media of cached messages deleted for everyone (env WHATSAPP_MCP_KEEP_REVOKED)")
 	fs.StringVar(&autoDownload, "auto-download", "", "download incoming media of these types automatically: comma list of image,video,audio,document, or all (default: off, env WHATSAPP_MCP_AUTO_DOWNLOAD)")
 	fs.IntVar(&autoDownloadMaxMB, "auto-download-max-mb", client.DefaultAutoDownloadMaxMB, "skip auto-download of media larger than this many MiB; 0 = no limit (env WHATSAPP_MCP_AUTO_DOWNLOAD_MAX_MB)")
 	if err := fs.Parse(args); err != nil {
@@ -51,6 +53,11 @@ func runServe(storeDir string, redactor *security.Redactor, args []string) int {
 	flagSet := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { flagSet[f.Name] = true })
 	readOnly, err = resolveReadOnly(flagSet["read-only"], readOnly, os.Getenv("WHATSAPP_MCP_READ_ONLY"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		return 2
+	}
+	keepRevoked, err = resolveKeepRevoked(flagSet["keep-revoked"], keepRevoked, os.Getenv("WHATSAPP_MCP_KEEP_REVOKED"))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		return 2
@@ -124,6 +131,7 @@ func runServe(storeDir string, redactor *security.Redactor, args []string) int {
 		AllowedMediaRoot: allowedMediaRoot,
 		Redactor:         redactor,
 		PairingHistory:   history,
+		KeepRevoked:      keepRevoked,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "init client: %v\n", err)
@@ -201,6 +209,24 @@ func resolveReadOnly(flagSet, flagValue bool, env string) (bool, error) {
 	v, err := strconv.ParseBool(env)
 	if err != nil {
 		return false, fmt.Errorf("WHATSAPP_MCP_READ_ONLY=%q: want 1/true or 0/false", env)
+	}
+	return v, nil
+}
+
+// resolveKeepRevoked applies the -keep-revoked / WHATSAPP_MCP_KEEP_REVOKED /
+// default (off) precedence. An explicitly set flag wins, including
+// -keep-revoked=false. The env var accepts strconv.ParseBool values; anything
+// else is an error rather than a silent default.
+func resolveKeepRevoked(flagSet, flagValue bool, env string) (bool, error) {
+	if flagSet {
+		return flagValue, nil
+	}
+	if env == "" {
+		return false, nil
+	}
+	v, err := strconv.ParseBool(env)
+	if err != nil {
+		return false, fmt.Errorf("WHATSAPP_MCP_KEEP_REVOKED=%q: want 1/true or 0/false", env)
 	}
 	return v, nil
 }

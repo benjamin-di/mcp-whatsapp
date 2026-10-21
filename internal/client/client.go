@@ -15,6 +15,7 @@ import (
 	"go.mau.fi/whatsmeow"
 	wmstore "go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/store/sqlstore"
+	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	waLog "go.mau.fi/whatsmeow/util/log"
 
@@ -39,12 +40,17 @@ type Config struct {
 	// links. New writes it into whatsmeow's pairing properties; the zero
 	// value keeps whatsmeow's defaults.
 	PairingHistory PairingHistory
+	// KeepRevoked keeps the text and media of a cached message when it is
+	// deleted for everyone. By default they are cleared and only the
+	// deletion is recorded.
+	KeepRevoked bool
 }
 
 // Client wraps a whatsmeow.Client together with the message cache and logger.
 type Client struct {
 	wa               *whatsmeow.Client
 	downloadMedia    func(context.Context, whatsmeow.DownloadableMessage) ([]byte, error)
+	groupInfo        func(context.Context, types.JID) (*types.GroupInfo, error)
 	store            *store.Store
 	log              waLog.Logger
 	handlerID        uint32
@@ -54,6 +60,7 @@ type Client struct {
 	limiter          *ratelimit.Limiter
 	conn             connTracker
 	autoDownload     *autoDownloader // nil unless StartAutoDownload enabled it
+	keepRevoked      bool
 }
 
 // New constructs a Client. It sets the latest WhatsApp version best-effort,
@@ -145,11 +152,13 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	c := &Client{
 		wa:               wa,
 		downloadMedia:    wa.Download,
+		groupInfo:        wa.GetGroupInfo,
 		store:            cfg.Store,
 		log:              logger,
 		allowedMediaRoot: cfg.AllowedMediaRoot,
 		redactor:         redactor,
 		limiter:          limiter,
+		keepRevoked:      cfg.KeepRevoked,
 	}
 	// Track connection state from the start so pairing events, which
 	// arrive before StartEventHandler, are seen too.
