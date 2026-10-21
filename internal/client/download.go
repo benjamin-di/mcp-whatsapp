@@ -24,7 +24,17 @@ type DownloadResult struct {
 	MediaType string
 	Filename  string
 	Path      string
+
+	// err is the underlying cause of a failure, when there is one. It is
+	// not part of the tool response; auto-download uses it to tell media
+	// that is gone for good from a transient failure.
+	err error
 }
+
+var (
+	errIncompleteMedia = errors.New("incomplete media information for download")
+	errInvalidMedia    = errors.New("downloaded media failed validation")
+)
 
 // MediaDownloader implements whatsmeow.DownloadableMessage for cached media.
 type MediaDownloader struct {
@@ -130,7 +140,7 @@ func (c *Client) Download(ctx context.Context, messageID, chatJID, outputPath st
 	}
 
 	if url == "" || len(mediaKey) == 0 || len(fileSHA256) == 0 || len(fileEncSHA256) == 0 || fileLength == 0 {
-		return DownloadResult{Success: false, Message: "incomplete media information for download"}
+		return DownloadResult{Success: false, Message: errIncompleteMedia.Error(), err: errIncompleteMedia}
 	}
 
 	c.log.Infof("Attempting to download media for message %s in chat %s...", c.redactor.MsgID(messageID), c.redactor.JID(chatJID))
@@ -168,11 +178,11 @@ func (c *Client) Download(ctx context.Context, messageID, chatJID, outputPath st
 		err = errors.New("media downloader is unavailable")
 	}
 	if err != nil {
-		return DownloadResult{Success: false, Message: fmt.Sprintf("failed to download media: %v", err)}
+		return DownloadResult{Success: false, Message: fmt.Sprintf("failed to download media: %v", err), err: err}
 	}
 
 	if err := validateMediaPayload(data, fileLength, fileSHA256); err != nil {
-		return DownloadResult{Success: false, Message: fmt.Sprintf("downloaded media failed validation: %v", err)}
+		return DownloadResult{Success: false, Message: fmt.Sprintf("%v: %v", errInvalidMedia, err), err: errInvalidMedia}
 	}
 	if err := replaceCacheFile(messageDir, localPath, data); err != nil {
 		return DownloadResult{Success: false, Message: fmt.Sprintf("failed to save media file: %v", err)}

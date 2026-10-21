@@ -48,6 +48,7 @@ type Client struct {
 	allowedMediaRoot string
 	redactor         *security.Redactor
 	limiter          *ratelimit.Limiter
+	autoDownload     *autoDownloader // nil unless StartAutoDownload enabled it
 }
 
 // New constructs a Client. It sets the latest WhatsApp version best-effort,

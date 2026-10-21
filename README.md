@@ -79,6 +79,8 @@ Restart the client. The daemon outlives client restarts.
 
 Paths outside the root, including symlinks that resolve outside it, are rejected. Anything inside the root is readable and writable by the tools, so keep secrets out.
 
+**Automatic download.** WhatsApp's CDN keeps media only for a limited time; after that `download_media` fails with HTTP 403, 404 or 410. To keep the files, run `serve -auto-download image,video,audio,document` (or `all`, or any subset): media of those types is downloaded as messages arrive, live or through history sync, into the same cache `download_media` reads, so a later `download_media` returns the cached file without fetching it again. Files whose declared size exceeds `-auto-download-max-mb` (default 25 MiB, above the 16 MB WhatsApp has long applied to ordinary photos, videos and voice notes; `0` removes the limit) are skipped. Two background workers do the downloads from a queue of 4096; if the queue is full, for example during a large history sync, further media is skipped with a warning and can still be fetched with `download_media`. Media WhatsApp no longer has, common for older history, is logged once, recorded in `messages.db` and never retried automatically. Stickers are not stored, so they cannot be selected.
+
 **Sandboxed clients (Claude Cowork and similar)** cannot read the daemon's cache. Point `WHATSAPP_MCP_MEDIA_ROOT` at a directory the sandbox can read and give the client this instruction:
 
 > When calling the WhatsApp MCP's `download_media`, always pass `output_path` set to a path under your shared workspace. Without it the decrypted file lands only in the daemon's local cache, which is outside your sandbox and unreadable. `output_path` must live under `WHATSAPP_MCP_MEDIA_ROOT` on the daemon side; the basename is yours to pick.
@@ -88,6 +90,8 @@ Paths outside the root, including symlinks that resolve outside it, are rejected
 - `-addr host:port` (env `WHATSAPP_MCP_ADDR`, default `127.0.0.1:8765`).
 - `-allow-remote`: bind a non-loopback address. Requires `WHATSAPP_MCP_TOKEN`, a bearer token for `/mcp` and `/pair/*`; `serve` exits without it.
 - `WHATSAPP_MCP_MEDIA_ROOT`: the file allowlist root above.
+- `-auto-download TYPES` (env `WHATSAPP_MCP_AUTO_DOWNLOAD`, default off): media types to download automatically, see [Automatic download](#sending-and-receiving-files).
+- `-auto-download-max-mb N` (env `WHATSAPP_MCP_AUTO_DOWNLOAD_MAX_MB`, default `25`): size cap in MiB for automatic downloads; `0` means no limit.
 - `WHATSAPP_MCP_DEBUG=1` or `-debug`: verbose logs (see [Debug logging](#debug-logging)).
 
 ## Running the daemon

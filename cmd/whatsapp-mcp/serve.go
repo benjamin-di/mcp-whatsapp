@@ -5,11 +5,14 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"math"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 
 	"github.com/sealjay/mcp-whatsapp/internal/client"
@@ -21,14 +24,29 @@ import (
 
 func runServe(storeDir string, redactor *security.Redactor, args []string) int {
 	var (
-		addr        string
-		allowRemote bool
+		addr              string
+		allowRemote       bool
+		autoDownload      string
+		autoDownloadMaxMB int
 	)
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	fs.StringVar(&addr, "addr", "", "HTTP bind address (default: 127.0.0.1:8765, env WHATSAPP_MCP_ADDR)")
 	fs.BoolVar(&allowRemote, "allow-remote", false, "allow binding to a non-loopback address")
+	fs.StringVar(&autoDownload, "auto-download", "", "download incoming media of these types automatically: comma list of image,video,audio,document, or all (default: off, env WHATSAPP_MCP_AUTO_DOWNLOAD)")
+	fs.IntVar(&autoDownloadMaxMB, "auto-download-max-mb", client.DefaultAutoDownloadMaxMB, "skip auto-download of media larger than this many MiB; 0 = no limit (env WHATSAPP_MCP_AUTO_DOWNLOAD_MAX_MB)")
 	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	flagSet := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { flagSet[f.Name] = true })
+	autoDownloadCfg, err := resolveAutoDownload(
+		autoDownload, flagSet["auto-download"],
+		autoDownloadMaxMB, flagSet["auto-download-max-mb"],
+		os.Getenv,
+	)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
 		return 2
 	}
 
@@ -96,6 +114,19 @@ func runServe(storeDir string, redactor *security.Redactor, args []string) int {
 		return 1
 	}
 
+	// Start the download workers before the driver connects, so the event
+	// handler sees them from the first message on. Stopping them is
+	// deferred after st.Close, so it runs first on shutdown.
+	stopAutoDownload := c.StartAutoDownload(ctx, autoDownloadCfg)
+	defer stopAutoDownload()
+	if autoDownloadCfg.Enabled() {
+		limit := "no size limit"
+		if autoDownloadCfg.MaxBytes > 0 {
+			limit = fmt.Sprintf("up to %d MiB", autoDownloadCfg.MaxBytes>>20)
+		}
+		fmt.Fprintf(os.Stderr, "auto-download: %s (%s)\n", strings.Join(autoDownloadCfg.TypeList(), ","), limit)
+	}
+
 	drv := newProductionDriver(c)
 
 	// The daemon owns the pair cache, so build it first, then hand the cache
@@ -134,6 +165,34 @@ func resolveAddr(flagValue string) string {
 		return env
 	}
 	return "127.0.0.1:8765"
+}
+
+// resolveAutoDownload applies the flag / env / default precedence for the
+// -auto-download and -auto-download-max-mb flags. A flag that was set on the
+// command line wins over its env var, even when set to the empty string.
+func resolveAutoDownload(typesFlag string, typesSet bool, maxMBFlag int, maxMBSet bool, getenv func(string) string) (client.AutoDownloadConfig, error) {
+	spec := typesFlag
+	if !typesSet {
+		spec = getenv("WHATSAPP_MCP_AUTO_DOWNLOAD")
+	}
+	types, err := client.ParseAutoDownloadTypes(spec)
+	if err != nil {
+		return client.AutoDownloadConfig{}, fmt.Errorf("auto-download: %w", err)
+	}
+
+	maxMB := maxMBFlag
+	if !maxMBSet {
+		if env := strings.TrimSpace(getenv("WHATSAPP_MCP_AUTO_DOWNLOAD_MAX_MB")); env != "" {
+			maxMB, err = strconv.Atoi(env)
+			if err != nil {
+				return client.AutoDownloadConfig{}, fmt.Errorf("WHATSAPP_MCP_AUTO_DOWNLOAD_MAX_MB: %q is not a whole number of MiB", env)
+			}
+		}
+	}
+	if maxMB < 0 || uint64(maxMB) > math.MaxUint64>>20 {
+		return client.AutoDownloadConfig{}, fmt.Errorf("auto-download max size must be 0 (no limit) or a positive number of MiB, got %d", maxMB)
+	}
+	return client.AutoDownloadConfig{Types: types, MaxBytes: uint64(maxMB) << 20}, nil
 }
 
 // isLoopbackAddr reports whether addr's host resolves to a loopback IP.
