@@ -1,0 +1,45 @@
+name: Fleet CI
+
+# The fleet branch's CI (benjamin-di fork): upstream's checks, on the branch this fork builds images from. `fleet` is
+# upstream main merged with our open pull-request branches (each also open upstream); upstream's own ci.yml runs only
+# for main and pull requests. fleet-release.yml requires this workflow's success for the commit it builds.
+on:
+  push:
+    branches: [fleet]
+  pull_request:
+    branches: [fleet]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fleet-ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: go mod download
+      - name: gofmt
+        run: |
+          diff=$(gofmt -l .)
+          if [ -n "$diff" ]; then
+            echo "gofmt differences:"
+            echo "$diff"
+            gofmt -d .
+            exit 1
+          fi
+      - run: go vet ./...
+      - run: go test -race ./...
+      - run: go build ./...
+      - name: mdtest parity grep
+        run: bash ./scripts/mdtest-parity.sh
