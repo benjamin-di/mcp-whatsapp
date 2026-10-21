@@ -35,6 +35,10 @@ type Config struct {
 	// explicitly-configured limiter to override the defaults, or leave the
 	// field nil on a Client literal (as unit tests do) to disable limiting.
 	RateLimiter *ratelimit.Limiter
+	// PairingHistory asks the phone for more history when this device
+	// links. New writes it into whatsmeow's pairing properties; the zero
+	// value keeps whatsmeow's defaults.
+	PairingHistory PairingHistory
 }
 
 // Client wraps a whatsmeow.Client together with the message cache and logger.
@@ -76,6 +80,12 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 		limiter = ratelimit.New(ratelimit.DefaultConfig())
 	}
 
+	// Pairing properties are read when the handshake is built, so they
+	// must be in place before the first Connect.
+	if err := ApplyPairingHistory(cfg.PairingHistory); err != nil {
+		return nil, fmt.Errorf("pairing history: %w", err)
+	}
+
 	// Best-effort: fetch the latest WhatsApp version so the server doesn't
 	// reject us as outdated. Failure here is non-fatal.
 	if latest, err := whatsmeow.GetLatestVersion(ctx, nil); err != nil {
@@ -115,6 +125,13 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 			logger.Infof("Created new device")
 		} else {
 			return nil, fmt.Errorf("get device: %w", err)
+		}
+	}
+	if cfg.PairingHistory.Full {
+		if device.ID != nil {
+			logger.Warnf("Full history sync requested, but this device is already linked: it only applies to a new pairing (unlink the device in WhatsApp and pair again)")
+		} else {
+			logger.Infof("Will ask the phone for a full history sync when pairing (%s)", cfg.PairingHistory.describe())
 		}
 	}
 

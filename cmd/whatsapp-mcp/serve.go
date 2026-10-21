@@ -28,7 +28,14 @@ func runServe(storeDir string, redactor *security.Redactor, args []string) int {
 	fs.SetOutput(os.Stderr)
 	fs.StringVar(&addr, "addr", "", "HTTP bind address (default: 127.0.0.1:8765, env WHATSAPP_MCP_ADDR)")
 	fs.BoolVar(&allowRemote, "allow-remote", false, "allow binding to a non-loopback address")
+	var historyFlags pairingHistoryFlags
+	historyFlags.register(fs)
 	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	history, err := historyFlags.resolve(fs, os.Getenv)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "serve: %v\n", err)
 		return 2
 	}
 
@@ -90,6 +97,7 @@ func runServe(storeDir string, redactor *security.Redactor, args []string) int {
 		Logger:           client.NewStderrLogger("Client", "INFO", false),
 		AllowedMediaRoot: allowedMediaRoot,
 		Redactor:         redactor,
+		PairingHistory:   history,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "init client: %v\n", err)
