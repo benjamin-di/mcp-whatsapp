@@ -35,6 +35,18 @@ func (c *Client) StartEventHandler() {
 			c.log.Infof("Connected to WhatsApp")
 		case *events.LoggedOut:
 			c.log.Warnf("Device logged out, please scan QR code to log in again")
+		case *events.Disconnected:
+			c.log.Warnf("Disconnected from WhatsApp")
+		case *events.StreamReplaced:
+			c.log.Errorf("Disconnected: another client connected with this session")
+		case *events.ClientOutdated:
+			c.log.Errorf("Disconnected: WhatsApp rejected this client version as outdated")
+		case *events.TemporaryBan:
+			c.log.Errorf("Disconnected: %s", v.String())
+		case *events.KeepAliveTimeout:
+			c.log.Warnf("Keepalive timed out (%d failures)", v.ErrorCount)
+		case *events.KeepAliveRestored:
+			c.log.Infof("Keepalive restored")
 		case *events.OfflineSyncPreview:
 			c.log.Infof("Offline sync starting - %d messages, %d receipts pending", v.Messages, v.Receipts)
 		case *events.OfflineSyncCompleted:

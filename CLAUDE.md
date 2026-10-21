@@ -1,13 +1,13 @@
 # CLAUDE.md
 
-Single Go binary that runs as an HTTP MCP daemon (default `127.0.0.1:8765`) wrapping [whatsmeow](https://github.com/tulir/whatsmeow) to expose a personal WhatsApp account as MCP tools. `whatsapp-mcp serve` is the long-running process: it tracks WhatsApp events, caches messages locally, serves MCP at `/mcp`, and hosts the pairing UI at `/pair`. MCP clients connect over stateless Streamable HTTP (`server.WithStateLess(true)`; MCP 2026-07-28 and older revisions, no `Mcp-Session-Id`).
+Single Go binary that runs as an HTTP MCP daemon (default `127.0.0.1:8765`) wrapping [whatsmeow](https://github.com/tulir/whatsmeow) to expose a personal WhatsApp account as MCP tools. `whatsapp-mcp serve` is the long-running process: it tracks WhatsApp events, caches messages locally, serves MCP at `/mcp`, hosts the pairing UI at `/pair`, and answers unauthenticated `/healthz` (liveness) and `/readyz` (paired + connected) probes. MCP clients connect over stateless Streamable HTTP (`server.WithStateLess(true)`; MCP 2026-07-28 and older revisions, no `Mcp-Session-Id`).
 
 ## Structure
 
 ```
-cmd/whatsapp-mcp/       login, serve, smoke subcommands
-internal/client/        whatsmeow client wrapper (send, download, events, history, features)
-internal/daemon/        HTTP server, pairing state machine, /pair endpoint
+cmd/whatsapp-mcp/       login, serve, smoke, healthcheck subcommands
+internal/client/        whatsmeow client wrapper (send, download, events, connection state, history, features)
+internal/daemon/        HTTP server, pairing state machine, /pair endpoint, /healthz + /readyz (health.go)
 internal/mcp/           mark3labs/mcp-go v1 server + tool registrations
 internal/media/         ogg analysis + ffmpeg shell-out
 internal/security/      path allowlisting, filename sanitisation, log redaction
@@ -22,6 +22,7 @@ Data lives under `./store/` (override with `-store DIR`): `messages.db`, `whatsa
 - `login` — pair the device via QR (or `-phone` for a pairing code), write session to `store/whatsapp.db`.
 - `serve` — HTTP daemon on `127.0.0.1:<port>`; tracks events + serves MCP at `/mcp`; pairing UI at `/pair`. `-read-only` registers only tools that cannot change anything on WhatsApp. Holds `store/.lock` while running and is mutually exclusive with any other `serve` instance using the same store directory.
 - `smoke` — boot-test without connecting to WhatsApp.
+- `healthcheck` — GET `/healthz` (`-ready`: `/readyz`) on `-addr` / `WHATSAPP_MCP_ADDR`, exit 0 on 200. The Dockerfile `HEALTHCHECK` uses it, so the image needs no curl.
 
 `login` and `serve` both accept `-full-history`, `-history-days N` and `-history-size-mb N` (env `WHATSAPP_MCP_FULL_HISTORY`, `WHATSAPP_MCP_HISTORY_DAYS`, `WHATSAPP_MCP_HISTORY_SIZE_MB`; flag wins). They are parsed in `cmd/whatsapp-mcp/history_flags.go` into `client.PairingHistory`, which `client.New` writes into whatsmeow's package-level `store.DeviceProps` (`RequireFullSync` + `HistorySyncConfig`) before any connect (`internal/client/pairing_history.go`). They only affect a new pairing; the phone decides what it sends.
 
@@ -61,6 +62,7 @@ Tool surface is 42 tools, registered from `internal/mcp/tools.go` + `tools_group
 8. **Polls + contact cards + view-once flag** — `internal/client/features_media.go` (poll send / vote / tally + contact-card send paths) plus `internal/client/vcard.go` (vCard 3.0 synthesis when no override supplied) and the `ViewOnce` option plumbed through `SendMediaOptions` in `internal/client/send.go`. `SendPoll` now uses `wa.BuildPollCreation` so the required `MessageSecret` is attached (without it, votes cannot be decrypted — this was silently broken before). Vote ingest + tally live in `internal/client/events.go::handlePollVote` and `internal/store/poll.go` (the new `poll_votes` table + `messages.poll_options_json` column).
 9. **Presence / privacy / status message** — `internal/client/features_privacy.go`. `SendPresence` (own availability), `GetPrivacySettings` / `SetPrivacySetting` with strict enum validation, `SetStatusMessage` for the "About" text.
 10. **Read-only mode** — `internal/mcp/readonly.go`. `serve -read-only` (env `WHATSAPP_MCP_READ_ONLY`) passes `mcp.WithReadOnly(true)`. Every tool registers through `s.addTool`, which then skips any tool not marked `keepInReadOnly` in `readOnlyPolicies`; unclassified tools are skipped too (fail closed). A new tool needs a `readOnlyPolicies` entry, and keeping it in read-only mode also needs `expectedReadOnlyToolNames` (plus `readOnlyHintExceptions` if its `ReadOnlyHint` is false) in `tools_readonly_test.go`. `get_status` reports `read_only`; read-only mode also sets MCP server instructions.
+11. **Connection state** — `internal/client/connstate.go`. `connTracker` is registered as a whatsmeow event handler in `client.New` (so it sees pairing events too) and folds Connected / Disconnected / ConnectFailure / KeepAliveTimeout / KeepAliveRestored / LoggedOut / StreamReplaced / ClientOutdated / TemporaryBan / PairSuccess into a `ConnectionStatus` (state, since, reason, ban, last event and message times). Terminal states (logged_out, stream_replaced, client_outdated, temporary_ban) are only left by Connected or PairSuccess, so a late Disconnected cannot mask them. `get_status` and the daemon's `/readyz` both read `Client.ConnectionStatus()`; `/readyz` exposes only `ready`, `state`, `since` and `last_event_age_seconds`, because it is unauthenticated.
 
 ## Versioning
 

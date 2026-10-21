@@ -105,7 +105,7 @@ Paths outside the root, including symlinks that resolve outside it, are rejected
 ### Serve flags and environment
 
 - `-addr host:port` (env `WHATSAPP_MCP_ADDR`, default `127.0.0.1:8765`).
-- `-allow-remote`: bind a non-loopback address. Requires `WHATSAPP_MCP_TOKEN`, a bearer token for `/mcp` and `/pair/*`; `serve` exits without it.
+- `-allow-remote`: bind a non-loopback address. Requires `WHATSAPP_MCP_TOKEN`, a bearer token for `/mcp` and `/pair/*`; `serve` exits without it. The `/healthz` and `/readyz` probes stay unauthenticated (see [Health checks](#health-checks)).
 - `WHATSAPP_MCP_MEDIA_ROOT`: the file allowlist root above.
 - `WHATSAPP_MCP_DEBUG=1` or `-debug`: verbose logs (see [Debug logging](#debug-logging)).
 - `-full-history`, `-history-days N`, `-history-size-mb N` (env `WHATSAPP_MCP_FULL_HISTORY`, `WHATSAPP_MCP_HISTORY_DAYS`, `WHATSAPP_MCP_HISTORY_SIZE_MB`): how much history to ask for when pairing through `/pair` (see [Full history at pairing](#full-history-at-pairing)).
@@ -145,12 +145,39 @@ docker run -d --name whatsapp-mcp -v whatsapp-mcp-store:/home/app/store \
 
 Clients then send `Authorization: Bearer $TOKEN`. The container binds loopback by default, so `-allow-remote` plus a token is what makes `-p` work. To re-pair after WhatsApp rotates the session (about every 20 days), stop the container, rerun the `login` container and start it again.
 
+### Health checks
+
+`serve` answers two unauthenticated probes (GET or HEAD, JSON, `Cache-Control: no-store`):
+
+| Endpoint | 200 when | Body |
+|---|---|---|
+| `/healthz` | the HTTP server is serving (no WhatsApp dependency) | `{"status":"ok"}` |
+| `/readyz` | paired, connected and keepalives succeeding; otherwise 503 | `{"ready", "state", "since", "last_event_age_seconds"}` |
+
+`state` is `unpaired`, `connecting`, `connected`, `disconnected` (whatsmeow reconnects on its own), `logged_out` (re-pair), `stream_replaced` (another process uses the same session), `client_outdated` (upgrade) or `temporary_ban`. `since` is when the state last changed; `last_event_age_seconds` is the time since WhatsApp last delivered any event. Neither endpoint returns JIDs, phone numbers, reasons or message data; `get_status` over `/mcp` adds the reason, ban expiry and last-message time. Use `/healthz` for liveness (restarting does not fix a logged-out session) and `/readyz` for readiness or alerting. If the port is reachable by others, the probes tell them whether the account is online and how recently it saw activity; keep them off public routes.
+
+The image's `HEALTHCHECK` runs `whatsapp-mcp healthcheck`, which GETs `/healthz` on `WHATSAPP_MCP_ADDR` (`0.0.0.0` becomes `127.0.0.1`; default `127.0.0.1:8765`) and exits 0 on 200, so the image needs no curl. Pass `-ready` to probe `/readyz` instead. In compose:
+
+```yaml
+services:
+  whatsapp-mcp:
+    image: whatsapp-mcp
+    command: ["serve", "-allow-remote"]
+    environment:
+      WHATSAPP_MCP_ADDR: 0.0.0.0:8765
+      WHATSAPP_MCP_TOKEN: ${WHATSAPP_MCP_TOKEN}
+    healthcheck:
+      test: ["CMD", "whatsapp-mcp", "healthcheck", "-ready"]   # or omit to keep the image's /healthz check
+      interval: 30s
+      start_period: 1m
+```
+
 ## Architecture
 
 ```
-cmd/whatsapp-mcp/       login / serve / smoke subcommands
-internal/client/        whatsmeow client wrapper (send, download, events, history, features)
-internal/daemon/        HTTP server, pairing state machine, /pair endpoints
+cmd/whatsapp-mcp/       login / serve / smoke / healthcheck subcommands
+internal/client/        whatsmeow client wrapper (send, download, events, connection state, history, features)
+internal/daemon/        HTTP server, pairing state machine, /pair endpoints, /healthz + /readyz probes
 internal/mcp/           mark3labs/mcp-go v1 server + tool registrations
 internal/media/         ogg parsing, waveform synthesis, ffmpeg shell-out
 internal/security/      path allowlisting, filename sanitisation, log redaction
@@ -237,7 +264,7 @@ Data lives under `./store/` (`-store DIR`): `messages.db` (message cache), `what
 | Tool | Purpose |
 |---|---|
 | `is_on_whatsapp` | Batch-check which phone numbers are registered on WhatsApp |
-| `get_status` | Report whether the bridge is connected and which account it's paired as |
+| `get_status` | Report whether the bridge is connected and which account it's paired as, plus the connection `state` (as `/readyz`), `ready`, `reason`, ban expiry, last event/message times and whether the server runs `read_only` |
 | `pairing_status` | Report the device-pairing state as a structured `setup_state` envelope (`ready` / `awaiting_qr` + `qr_payload` / `error`) for programmatic supervisors that surface the linking QR |
 
 ### Deferred
