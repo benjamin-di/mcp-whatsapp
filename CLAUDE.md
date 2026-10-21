@@ -20,7 +20,7 @@ Data lives under `./store/` (override with `-store DIR`): `messages.db`, `whatsa
 ## Subcommands
 
 - `login` — pair the device via QR (or `-phone` for a pairing code), write session to `store/whatsapp.db`.
-- `serve` — HTTP daemon on `127.0.0.1:<port>`; tracks events + serves MCP at `/mcp`; pairing UI at `/pair`. Holds `store/.lock` while running and is mutually exclusive with any other `serve` instance using the same store directory.
+- `serve` — HTTP daemon on `127.0.0.1:<port>`; tracks events + serves MCP at `/mcp`; pairing UI at `/pair`. `-read-only` registers only tools that cannot change anything on WhatsApp. Holds `store/.lock` while running and is mutually exclusive with any other `serve` instance using the same store directory.
 - `smoke` — boot-test without connecting to WhatsApp.
 
 ## Testing
@@ -58,6 +58,7 @@ Tool surface is 42 tools, registered from `internal/mcp/tools.go` + `tools_group
 7. **Blocklist** — `internal/client/features_blocklist.go`. `GetBlocklist`, `BlockContact`, `UnblockContact` wrap whatsmeow's `GetBlocklist` / `UpdateBlocklist` (no `dhash` caching: each call fetches the full list). `get_blocklist` keeps its `DHash`/`JIDs`/`Contacts` JSON shape; phones come from whatsmeow's `BlocklistItem.PN`, falling back to the LID map.
 8. **Polls + contact cards + view-once flag** — `internal/client/features_media.go` (poll send / vote / tally + contact-card send paths) plus `internal/client/vcard.go` (vCard 3.0 synthesis when no override supplied) and the `ViewOnce` option plumbed through `SendMediaOptions` in `internal/client/send.go`. `SendPoll` now uses `wa.BuildPollCreation` so the required `MessageSecret` is attached (without it, votes cannot be decrypted — this was silently broken before). Vote ingest + tally live in `internal/client/events.go::handlePollVote` and `internal/store/poll.go` (the new `poll_votes` table + `messages.poll_options_json` column).
 9. **Presence / privacy / status message** — `internal/client/features_privacy.go`. `SendPresence` (own availability), `GetPrivacySettings` / `SetPrivacySetting` with strict enum validation, `SetStatusMessage` for the "About" text.
+10. **Read-only mode** — `internal/mcp/readonly.go`. `serve -read-only` (env `WHATSAPP_MCP_READ_ONLY`) passes `mcp.WithReadOnly(true)`. Every tool registers through `s.addTool`, which then skips any tool not marked `keepInReadOnly` in `readOnlyPolicies`; unclassified tools are skipped too (fail closed). A new tool needs a `readOnlyPolicies` entry, and keeping it in read-only mode also needs `expectedReadOnlyToolNames` (plus `readOnlyHintExceptions` if its `ReadOnlyHint` is false) in `tools_readonly_test.go`. `get_status` reports `read_only`; read-only mode also sets MCP server instructions.
 
 ## Versioning
 

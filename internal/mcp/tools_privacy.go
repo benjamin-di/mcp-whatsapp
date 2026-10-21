@@ -27,7 +27,7 @@ func (s *Server) registerGetBlocklist() {
 		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(true),
 	)
-	s.mcp.AddTool(tool, func(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	s.addTool(tool, func(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		js, err := s.client.GetBlocklist(ctx)
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
@@ -49,7 +49,7 @@ func (s *Server) registerBlockContact() {
 		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(true),
 	)
-	s.mcp.AddTool(tool, mcp.NewTypedToolHandler(func(ctx context.Context, _ mcp.CallToolRequest, a blocklistMutationArgs) (*mcp.CallToolResult, error) {
+	s.addTool(tool, mcp.NewTypedToolHandler(func(ctx context.Context, _ mcp.CallToolRequest, a blocklistMutationArgs) (*mcp.CallToolResult, error) {
 		if r := requireNonEmpty("jid", a.JID); r != nil {
 			return r, nil
 		}
@@ -69,7 +69,7 @@ func (s *Server) registerUnblockContact() {
 		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(true),
 	)
-	s.mcp.AddTool(tool, mcp.NewTypedToolHandler(func(ctx context.Context, _ mcp.CallToolRequest, a blocklistMutationArgs) (*mcp.CallToolResult, error) {
+	s.addTool(tool, mcp.NewTypedToolHandler(func(ctx context.Context, _ mcp.CallToolRequest, a blocklistMutationArgs) (*mcp.CallToolResult, error) {
 		if r := requireNonEmpty("jid", a.JID); r != nil {
 			return r, nil
 		}
@@ -93,7 +93,7 @@ func (s *Server) registerSendPresence() {
 		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(true),
 	)
-	s.mcp.AddTool(tool, mcp.NewTypedToolHandler(func(ctx context.Context, _ mcp.CallToolRequest, a sendPresenceArgs) (*mcp.CallToolResult, error) {
+	s.addTool(tool, mcp.NewTypedToolHandler(func(ctx context.Context, _ mcp.CallToolRequest, a sendPresenceArgs) (*mcp.CallToolResult, error) {
 		if r := requireNonEmpty("state", a.State); r != nil {
 			return r, nil
 		}
@@ -112,7 +112,7 @@ func (s *Server) registerGetPrivacySettings() {
 		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(true),
 	)
-	s.mcp.AddTool(tool, func(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	s.addTool(tool, func(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		js, err := s.client.GetPrivacySettings(ctx)
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
@@ -150,7 +150,7 @@ func (s *Server) registerSetPrivacySetting() {
 		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(true),
 	)
-	s.mcp.AddTool(tool, mcp.NewTypedToolHandler(func(ctx context.Context, _ mcp.CallToolRequest, a setPrivacySettingArgs) (*mcp.CallToolResult, error) {
+	s.addTool(tool, mcp.NewTypedToolHandler(func(ctx context.Context, _ mcp.CallToolRequest, a setPrivacySettingArgs) (*mcp.CallToolResult, error) {
 		if r := requireNonEmpty("name", a.Name); r != nil {
 			return r, nil
 		}
@@ -178,7 +178,7 @@ func (s *Server) registerSetStatusMessage() {
 		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(true),
 	)
-	s.mcp.AddTool(tool, mcp.NewTypedToolHandler(func(ctx context.Context, _ mcp.CallToolRequest, a setStatusMessageArgs) (*mcp.CallToolResult, error) {
+	s.addTool(tool, mcp.NewTypedToolHandler(func(ctx context.Context, _ mcp.CallToolRequest, a setStatusMessageArgs) (*mcp.CallToolResult, error) {
 		if err := s.client.SetStatusMessage(ctx, a.Text); err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
