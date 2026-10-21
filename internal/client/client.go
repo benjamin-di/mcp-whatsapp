@@ -15,6 +15,7 @@ import (
 	"go.mau.fi/whatsmeow"
 	wmstore "go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/store/sqlstore"
+	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	waLog "go.mau.fi/whatsmeow/util/log"
 
@@ -35,12 +36,17 @@ type Config struct {
 	// explicitly-configured limiter to override the defaults, or leave the
 	// field nil on a Client literal (as unit tests do) to disable limiting.
 	RateLimiter *ratelimit.Limiter
+	// KeepRevoked keeps the text and media of a cached message when it is
+	// deleted for everyone. By default they are cleared and only the
+	// deletion is recorded.
+	KeepRevoked bool
 }
 
 // Client wraps a whatsmeow.Client together with the message cache and logger.
 type Client struct {
 	wa               *whatsmeow.Client
 	downloadMedia    func(context.Context, whatsmeow.DownloadableMessage) ([]byte, error)
+	groupInfo        func(context.Context, types.JID) (*types.GroupInfo, error)
 	store            *store.Store
 	log              waLog.Logger
 	handlerID        uint32
@@ -48,6 +54,7 @@ type Client struct {
 	allowedMediaRoot string
 	redactor         *security.Redactor
 	limiter          *ratelimit.Limiter
+	keepRevoked      bool
 }
 
 // New constructs a Client. It sets the latest WhatsApp version best-effort,
@@ -126,11 +133,13 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	return &Client{
 		wa:               wa,
 		downloadMedia:    wa.Download,
+		groupInfo:        wa.GetGroupInfo,
 		store:            cfg.Store,
 		log:              logger,
 		allowedMediaRoot: cfg.AllowedMediaRoot,
 		redactor:         redactor,
 		limiter:          limiter,
+		keepRevoked:      cfg.KeepRevoked,
 	}, nil
 }
 

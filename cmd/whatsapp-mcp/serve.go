@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"syscall"
 
 	"github.com/sealjay/mcp-whatsapp/internal/client"
@@ -23,12 +24,26 @@ func runServe(storeDir string, redactor *security.Redactor, args []string) int {
 	var (
 		addr        string
 		allowRemote bool
+		keepRevoked bool
 	)
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	fs.StringVar(&addr, "addr", "", "HTTP bind address (default: 127.0.0.1:8765, env WHATSAPP_MCP_ADDR)")
 	fs.BoolVar(&allowRemote, "allow-remote", false, "allow binding to a non-loopback address")
+	fs.BoolVar(&keepRevoked, "keep-revoked", false, "keep the text and media of cached messages deleted for everyone (env WHATSAPP_MCP_KEEP_REVOKED)")
 	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+
+	keepRevokedSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "keep-revoked" {
+			keepRevokedSet = true
+		}
+	})
+	keepRevoked, err := resolveKeepRevoked(keepRevokedSet, keepRevoked, os.Getenv("WHATSAPP_MCP_KEEP_REVOKED"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
 		return 2
 	}
 
@@ -90,6 +105,7 @@ func runServe(storeDir string, redactor *security.Redactor, args []string) int {
 		Logger:           client.NewStderrLogger("Client", "INFO", false),
 		AllowedMediaRoot: allowedMediaRoot,
 		Redactor:         redactor,
+		KeepRevoked:      keepRevoked,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "init client: %v\n", err)
@@ -134,6 +150,24 @@ func resolveAddr(flagValue string) string {
 		return env
 	}
 	return "127.0.0.1:8765"
+}
+
+// resolveKeepRevoked applies the -keep-revoked / WHATSAPP_MCP_KEEP_REVOKED /
+// default (off) precedence. An explicitly set flag wins, including
+// -keep-revoked=false. The env var accepts strconv.ParseBool values; anything
+// else is an error rather than a silent default.
+func resolveKeepRevoked(flagSet, flagValue bool, env string) (bool, error) {
+	if flagSet {
+		return flagValue, nil
+	}
+	if env == "" {
+		return false, nil
+	}
+	v, err := strconv.ParseBool(env)
+	if err != nil {
+		return false, fmt.Errorf("WHATSAPP_MCP_KEEP_REVOKED=%q: want 1/true or 0/false", env)
+	}
+	return v, nil
 }
 
 // isLoopbackAddr reports whether addr's host resolves to a loopback IP.

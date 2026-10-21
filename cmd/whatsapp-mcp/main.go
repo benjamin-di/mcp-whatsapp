@@ -39,6 +39,7 @@ Global flags (before the command):
 Serve-specific flags (after 'serve'):
   -addr host:port   HTTP bind address (default: 127.0.0.1:8765, env WHATSAPP_MCP_ADDR)
   -allow-remote     Allow binding to a non-loopback address (dangerous)
+  -keep-revoked     Keep the text and media of cached messages deleted for everyone (env WHATSAPP_MCP_KEEP_REVOKED)
 `
 
 func main() {

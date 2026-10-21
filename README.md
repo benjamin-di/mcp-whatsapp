@@ -88,7 +88,16 @@ Paths outside the root, including symlinks that resolve outside it, are rejected
 - `-addr host:port` (env `WHATSAPP_MCP_ADDR`, default `127.0.0.1:8765`).
 - `-allow-remote`: bind a non-loopback address. Requires `WHATSAPP_MCP_TOKEN`, a bearer token for `/mcp` and `/pair/*`; `serve` exits without it.
 - `WHATSAPP_MCP_MEDIA_ROOT`: the file allowlist root above.
+- `-keep-revoked` (env `WHATSAPP_MCP_KEEP_REVOKED=1`): keep the text and media of cached messages that are deleted for everyone. By default the cache records the deletion and clears them (see [Edits and deletions](#edits-and-deletions)).
 - `WHATSAPP_MCP_DEBUG=1` or `-debug`: verbose logs (see [Debug logging](#debug-logging)).
+
+### Edits and deletions
+
+The cache follows edits and deletions for everyone, whether they arrive live, in history sync, or are made through `edit_message` / `delete_message`:
+
+- **Edits** replace the cached text (or media caption) and keep the message's ID and timestamp. `list_messages` marks the row `[edited]` and searches match the new text.
+- **Deletions for everyone** mark the row deleted: `list_messages` shows `[deleted]`, and the text, media fields and any copy `download_media` cached in the store directory are removed, so searches no longer match it. Start `serve` with `-keep-revoked` to keep the text and media (shown after the `[deleted]` marker) instead. Copies written to an `output_path` are left alone.
+- Only the original sender's edits and deletions are applied; a deletion of someone else's message is applied only in a group, from an admin. Edits and deletions of messages that are not cached are ignored.
 
 ## Running the daemon
 

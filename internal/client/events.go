@@ -136,6 +136,7 @@ func (c *Client) normalizeIncomingMessage(
 
 // handleMessage persists an incoming message and its chat metadata.
 func (c *Client) handleMessage(msg *events.Message) {
+	ctx := context.Background()
 	nm := c.normalizeIncomingMessage(
 		msg.Info.Chat.String(),
 		msg.Info.Sender.String(),
@@ -166,13 +167,20 @@ func (c *Client) handleMessage(msg *events.Message) {
 		return
 	}
 
+	// Edits and deletes for everyone change the cached original instead of
+	// adding a row.
+	if ch, ok := c.messageChangeOf(ctx, msg.Message, msg); ok {
+		c.applyChange(ctx, nm.chatJID, msg.Info.Chat, changerOf(msg), ch)
+		return
+	}
+
 	pollOptions := applyPollCreation(&nm, msg.Message)
 
 	if nm.msg.Content == "" && nm.msg.MediaType == "" {
 		return
 	}
 
-	if err := c.storeNormalized(context.Background(), nm, pollOptions); err != nil {
+	if err := c.storeNormalized(ctx, nm, pollOptions); err != nil {
 		c.log.Warnf("Failed to store message: %v", err)
 		return
 	}
@@ -248,17 +256,14 @@ func (c *Client) handleHistorySync(historySync *events.HistorySync) {
 		}
 		_ = c.store.StoreChat(chatJID, name, time.Unix(int64(ts), 0))
 
+		// Edits and deletes for everyone are applied once the
+		// conversation's messages are stored: they may target a message
+		// further on in the same batch (history runs newest first).
+		var changes []pendingChange
+
 		for _, msg := range messages {
 			webMsg := msg.GetMessage()
 			if webMsg == nil || webMsg.GetMessage() == nil || webMsg.GetMessageTimestamp() == 0 {
-				continue
-			}
-
-			// Edits and revokes are ProtocolMessages; applying them to
-			// stored rows is not handled here, so skip them as before.
-			// They must be filtered before ParseWebMessage, which turns
-			// an edit into the edited content under the original ID.
-			if isProtocolMessage(webMsg.GetMessage()) {
 				continue
 			}
 
@@ -268,7 +273,8 @@ func (c *Client) handleHistorySync(historySync *events.HistorySync) {
 			// the sender, from-me flag, ID and timestamp.
 			var rawSenderJID, senderUser string
 			evt, err := c.wa.ParseWebMessage(jid, webMsg)
-			if err == nil {
+			parsed := err == nil
+			if parsed {
 				// Our own messages keep the phone-number sender that sent
 				// messages are stored with, even in LID-addressed chats.
 				sender := evt.Info.Sender
@@ -284,6 +290,21 @@ func (c *Client) handleHistorySync(historySync *events.HistorySync) {
 				c.log.Debugf("History sync: deriving sender of message %s in %s from its key: %s",
 					c.redactor.MsgID(webMsg.GetKey().GetID()), c.redactor.JID(chatJID), reason)
 				evt, rawSenderJID, senderUser = historyEventFromKey(jid, ownID, webMsg)
+			}
+
+			// ParseWebMessage turns an edit into the edited content under
+			// the original ID, so edits and revokes are read from the raw
+			// message. They are only applied when the sender is known.
+			// Other protocol messages carry nothing to store.
+			raw := (&events.Message{RawMessage: webMsg.GetMessage()}).UnwrapRaw()
+			if ch, ok := c.messageChangeOf(ctx, raw.Message, evt); ok {
+				if parsed {
+					changes = append(changes, pendingChange{who: changerOf(evt), ch: ch})
+				}
+				continue
+			}
+			if raw.IsEdit || raw.Message.GetProtocolMessage() != nil {
+				continue
 			}
 
 			nm := c.normalizeIncomingMessage(
@@ -315,6 +336,10 @@ func (c *Client) handleHistorySync(historySync *events.HistorySync) {
 				c.log.Infof("Stored message: [%s] %s -> %s: %s",
 					timestamp.Format("2006-01-02 15:04:05"), c.redactor.JID(nm.msg.Sender), c.redactor.JID(chatJID), c.redactor.Body(nm.msg.Content))
 			}
+		}
+
+		for _, p := range changes {
+			c.applyChange(ctx, chatJID, jid, p.who, p.ch)
 		}
 	}
 
@@ -376,12 +401,11 @@ func (c *Client) storeNormalized(ctx context.Context, nm normalizedMessage, poll
 	return nil
 }
 
-// isProtocolMessage reports whether a raw message is a ProtocolMessage
-// (edit, revoke, ephemeral setting, ...) or an edit once its wrappers are
-// removed.
-func isProtocolMessage(raw *waProto.Message) bool {
-	evt := (&events.Message{RawMessage: raw}).UnwrapRaw()
-	return evt.IsEdit || evt.Message.GetProtocolMessage() != nil
+// pendingChange is an edit or revoke from a history-sync batch, held until
+// the batch's messages are stored.
+type pendingChange struct {
+	who changer
+	ch  messageChange
 }
 
 // GetChatName determines the appropriate name for a chat. It checks the

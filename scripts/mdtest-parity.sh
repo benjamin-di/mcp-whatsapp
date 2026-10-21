@@ -54,6 +54,7 @@ methods=(
   EncryptPollVote
   DecryptPollVote
   ParseWebMessage
+  DecryptSecretEncryptedMessage
 )
 
 missing=()
