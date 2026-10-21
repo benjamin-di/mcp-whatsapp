@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"errors"
 	"strings"
 	"time"
 
 	"go.mau.fi/whatsmeow"
 	waProto "go.mau.fi/whatsmeow/binary/proto"
 	"go.mau.fi/whatsmeow/proto/waHistorySync"
+	"go.mau.fi/whatsmeow/proto/waWeb"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 
@@ -164,31 +166,13 @@ func (c *Client) handleMessage(msg *events.Message) {
 		return
 	}
 
-	// Poll creation — store a "[poll] <question>" row for readability and
-	// cache the option names so we can decode vote SHA-256 hashes later.
-	var pollOptions []string
-	if msg.Message != nil {
-		if pc := msg.Message.GetPollCreationMessage(); pc != nil {
-			pollOptions = extractPollOptionNames(pc)
-			if nm.msg.Content == "" {
-				nm.msg.Content = "[poll] " + pc.GetName()
-			}
-		}
-	}
+	pollOptions := applyPollCreation(&nm, msg.Message)
 
 	if nm.msg.Content == "" && nm.msg.MediaType == "" {
 		return
 	}
 
-	err := c.store.StoreMessage(context.Background(), nm.msg, nm.mediaKey, nm.fileSHA256, nm.fileEncSHA256, nm.fileLength)
-
-	if err == nil && len(pollOptions) > 0 {
-		if perr := c.store.StorePollMetadata(context.Background(), msg.Info.ID, nm.chatJID, pollOptions); perr != nil {
-			c.log.Warnf("Failed to store poll metadata for %s: %v", msg.Info.ID, perr)
-		}
-	}
-
-	if err != nil {
+	if err := c.storeNormalized(context.Background(), nm, pollOptions); err != nil {
 		c.log.Warnf("Failed to store message: %v", err)
 		return
 	}
@@ -265,48 +249,49 @@ func (c *Client) handleHistorySync(historySync *events.HistorySync) {
 		_ = c.store.StoreChat(chatJID, name, time.Unix(int64(ts), 0))
 
 		for _, msg := range messages {
-			if msg == nil || msg.Message == nil {
+			webMsg := msg.GetMessage()
+			if webMsg == nil || webMsg.GetMessage() == nil || webMsg.GetMessageTimestamp() == 0 {
 				continue
 			}
 
-			msgTS := msg.Message.GetMessageTimestamp()
-			if msgTS == 0 {
+			// Edits and revokes are ProtocolMessages; applying them to
+			// stored rows is not handled here, so skip them as before.
+			// They must be filtered before ParseWebMessage, which turns
+			// an edit into the edited content under the original ID.
+			if isProtocolMessage(webMsg.GetMessage()) {
 				continue
 			}
-			timestamp := time.Unix(int64(msgTS), 0)
 
-			// Determine sender and isFromMe from the message key.
+			// ParseWebMessage gives history messages the same shape as
+			// live events: wrappers (ephemeral, view-once, document with
+			// caption, device-sent, ...) are unwrapped and Info carries
+			// the sender, from-me flag, ID and timestamp.
 			var rawSenderJID, senderUser string
-			isFromMe := false
-			if msg.Message.Key != nil {
-				if msg.Message.Key.FromMe != nil {
-					isFromMe = *msg.Message.Key.FromMe
+			evt, err := c.wa.ParseWebMessage(jid, webMsg)
+			if err == nil {
+				// Our own messages keep the phone-number sender that sent
+				// messages are stored with, even in LID-addressed chats.
+				sender := evt.Info.Sender
+				if evt.Info.IsFromMe && c.wa.Store.ID != nil {
+					sender = c.wa.Store.ID.ToNonAD()
 				}
-				if !isFromMe && msg.Message.Key.Participant != nil && *msg.Message.Key.Participant != "" {
-					rawSenderJID = *msg.Message.Key.Participant
-					senderUser = strings.Split(rawSenderJID, "@")[0]
-				} else if isFromMe {
-					rawSenderJID = ownID + "@s.whatsapp.net"
-					senderUser = ownID
-				} else {
-					rawSenderJID = jid.String()
-					senderUser = jid.User
-				}
+				rawSenderJID, senderUser = sender.String(), sender.User
 			} else {
-				rawSenderJID = jid.String()
-				senderUser = jid.User
-			}
-
-			msgID := ""
-			if msg.Message.Key != nil && msg.Message.Key.ID != nil {
-				msgID = *msg.Message.Key.ID
+				reason := "no usable sender"
+				if errors.Is(err, whatsmeow.ErrNotLoggedIn) {
+					reason = "own JID unknown"
+				}
+				c.log.Debugf("History sync: deriving sender of message %s in %s from its key: %s",
+					c.redactor.MsgID(webMsg.GetKey().GetID()), c.redactor.JID(chatJID), reason)
+				evt, rawSenderJID, senderUser = historyEventFromKey(jid, ownID, webMsg)
 			}
 
 			nm := c.normalizeIncomingMessage(
 				rawChatJID, rawSenderJID, senderUser,
-				isGroup, isFromMe, ownID,
-				msgID, timestamp, msg.Message.Message,
+				isGroup, evt.Info.IsFromMe, ownID,
+				evt.Info.ID, evt.Info.Timestamp, evt.Message,
 			)
+			pollOptions := applyPollCreation(&nm, evt.Message)
 
 			c.log.Infof("Message content: %s, Media Type: %s", c.redactor.Body(nm.msg.Content), nm.msg.MediaType)
 			if nm.msg.Content == "" && nm.msg.MediaType == "" {
@@ -317,11 +302,12 @@ func (c *Client) handleHistorySync(historySync *events.HistorySync) {
 			// conversation header — avoids re-resolving per message.
 			nm.msg.ChatJID = chatJID
 
-			if err := c.store.StoreMessage(ctx, nm.msg, nm.mediaKey, nm.fileSHA256, nm.fileEncSHA256, nm.fileLength); err != nil {
+			if err := c.storeNormalized(ctx, nm, pollOptions); err != nil {
 				c.log.Warnf("Failed to store history message: %v", err)
 				continue
 			}
 			syncedCount++
+			timestamp := evt.Info.Timestamp
 			if nm.msg.MediaType != "" {
 				c.log.Infof("Stored message: [%s] %s -> %s: [%s: %s] %s",
 					timestamp.Format("2006-01-02 15:04:05"), c.redactor.JID(nm.msg.Sender), c.redactor.JID(chatJID), nm.msg.MediaType, nm.msg.Filename, c.redactor.Body(nm.msg.Content))
@@ -333,6 +319,69 @@ func (c *Client) handleHistorySync(historySync *events.HistorySync) {
 	}
 
 	c.log.Infof("History sync complete. Stored %d messages.", syncedCount)
+}
+
+// historyEventFromKey is the fallback for history messages ParseWebMessage
+// rejects (e.g. a group message without a participant). The content is still
+// unwrapped; sender, from-me and ID come from the message key, falling back
+// to the chat itself as the sender.
+func historyEventFromKey(chat types.JID, ownID string, webMsg *waWeb.WebMessageInfo) (evt *events.Message, rawSenderJID, senderUser string) {
+	key := webMsg.GetKey()
+	evt = (&events.Message{RawMessage: webMsg.GetMessage()}).UnwrapRaw()
+	evt.Info.Chat = chat
+	evt.Info.IsFromMe = key.GetFromMe()
+	evt.Info.ID = key.GetID()
+	evt.Info.Timestamp = time.Unix(int64(webMsg.GetMessageTimestamp()), 0)
+
+	switch {
+	case !evt.Info.IsFromMe && key.GetParticipant() != "":
+		rawSenderJID = key.GetParticipant()
+		senderUser = strings.Split(rawSenderJID, "@")[0]
+	case evt.Info.IsFromMe:
+		rawSenderJID = ownID + "@s.whatsapp.net"
+		senderUser = ownID
+	default:
+		rawSenderJID = chat.String()
+		senderUser = chat.User
+	}
+	return evt, rawSenderJID, senderUser
+}
+
+// applyPollCreation handles a poll-creation message: it gives the row a
+// readable "[poll] <question>" body when it has none and returns the option
+// names, which must be cached so vote SHA-256 hashes can be decoded later.
+// Returns nil for any other message.
+func applyPollCreation(nm *normalizedMessage, m *waProto.Message) []string {
+	pc := m.GetPollCreationMessage()
+	if pc == nil {
+		return nil
+	}
+	if nm.msg.Content == "" {
+		nm.msg.Content = "[poll] " + pc.GetName()
+	}
+	return extractPollOptionNames(pc)
+}
+
+// storeNormalized persists a normalised message and, for poll creations,
+// the option names returned by applyPollCreation.
+func (c *Client) storeNormalized(ctx context.Context, nm normalizedMessage, pollOptions []string) error {
+	if err := c.store.StoreMessage(ctx, nm.msg, nm.mediaKey, nm.fileSHA256, nm.fileEncSHA256, nm.fileLength); err != nil {
+		return err
+	}
+	if len(pollOptions) > 0 {
+		if err := c.store.StorePollMetadata(ctx, nm.msg.ID, nm.msg.ChatJID, pollOptions); err != nil {
+			c.log.Warnf("Failed to store poll metadata for %s: %v", nm.msg.ID, err)
+		}
+	}
+	return nil
+}
+
+// isProtocolMessage reports whether a raw message is a ProtocolMessage
+// (edit, revoke, ephemeral setting, ...) or an edit once its wrappers are
+// removed.
+func isProtocolMessage(raw *waProto.Message) bool {
+	evt := (&events.Message{RawMessage: raw}).UnwrapRaw()
+	return evt.IsEdit || evt.Message.GetProtocolMessage() != nil
 }
 
 // GetChatName determines the appropriate name for a chat. It checks the
