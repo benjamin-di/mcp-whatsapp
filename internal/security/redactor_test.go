@@ -1,6 +1,12 @@
 package security
 
-import "testing"
+import (
+	"errors"
+	"fmt"
+	"io/fs"
+	"strings"
+	"testing"
+)
 
 func TestRedactor_JID(t *testing.T) {
 	r := &Redactor{}
@@ -144,5 +150,101 @@ func TestRedactor_MsgID_EmptyDebug(t *testing.T) {
 	r := &Redactor{Debug: true}
 	if got := r.MsgID(""); got != "" {
 		t.Fatalf("MsgID debug mode empty string should be empty, got %q", got)
+	}
+}
+
+func TestRedactor_Name_NonDebug(t *testing.T) {
+	r := &Redactor{}
+	cases := map[string]string{
+		"":             "[0B: name]",
+		"Alice":        "[5B: name]",
+		"Project Team": "[12B: name]",
+		"447700000001": "[12B: name]",
+		"Zoë":          "[4B: name]",
+	}
+	for in, want := range cases {
+		t.Run(in, func(t *testing.T) {
+			if got := r.Name(in); got != want {
+				t.Fatalf("Name(%q): want %q, got %q", in, want, got)
+			}
+		})
+	}
+}
+
+func TestRedactor_Name_Debug(t *testing.T) {
+	r := &Redactor{Debug: true}
+	if got := r.Name("Project Team"); got != "Project Team" {
+		t.Fatalf("debug mode should pass names through, got %q", got)
+	}
+	// Fallback names are often the bare phone number; mask it like Body.
+	if got, want := r.Name("447700000001"), "****00001"; got != want {
+		t.Fatalf("Name(phone): want %q, got %q", want, got)
+	}
+}
+
+func TestRedactor_Filename_NonDebug(t *testing.T) {
+	r := &Redactor{}
+	cases := map[string]string{
+		"":                       "[0B: file]",
+		"Contract draft.PDF":     "[18B: file .pdf]",
+		"photo.jpeg":             "[10B: file .jpeg]",
+		"README":                 "[6B: file]",
+		"archive.tar.gz":         "[14B: file .gz]",
+		"notes.verylongext":      "[17B: file]",
+		"Alice Smith passport.":  "[21B: file]",
+		"image_abc123.jpg":       "[16B: file .jpg]",
+		"report.p d f":           "[12B: file]",
+		"Call +15551234567.docx": "[22B: file .docx]",
+	}
+	for in, want := range cases {
+		t.Run(in, func(t *testing.T) {
+			if got := r.Filename(in); got != want {
+				t.Fatalf("Filename(%q): want %q, got %q", in, want, got)
+			}
+		})
+	}
+}
+
+func TestRedactor_Filename_Debug(t *testing.T) {
+	r := &Redactor{Debug: true}
+	if got := r.Filename("Contract draft.pdf"); got != "Contract draft.pdf" {
+		t.Fatalf("debug mode should pass filenames through, got %q", got)
+	}
+	if got, want := r.Filename("Call +15551234567.docx"), "Call ****34567.docx"; got != want {
+		t.Fatalf("Filename(phone): want %q, got %q", want, got)
+	}
+}
+
+func TestRedactor_Err(t *testing.T) {
+	r := &Redactor{}
+	if got := r.Err(nil); got != "<nil>" {
+		t.Errorf("Err(nil) = %q", got)
+	}
+
+	decrypt := errors.New("failed to decrypt secret message: cipher: message authentication failed (sender: 447700900123:12@s.whatsapp.net, orig sender: 98765432101234@lid and 120363000000000001@g.us)")
+	got := r.Err(fmt.Errorf("decrypt edit: %w", decrypt))
+	for _, leak := range []string{"447700900123", "98765432101234", "120363000000000001"} {
+		if strings.Contains(got, leak) {
+			t.Errorf("Err leaks %s: %q", leak, got)
+		}
+	}
+	if !strings.Contains(got, "message authentication failed") || !strings.Contains(got, "…0123") {
+		t.Errorf("Err dropped the cause or the redacted JID: %q", got)
+	}
+
+	path := "/store/447700900123@s.whatsapp.net/4d5347/photo of Alice.jpg"
+	got = r.Err(fmt.Errorf("remove cache: %w", &fs.PathError{Op: "unlinkat", Path: path, Err: fs.ErrPermission}))
+	if strings.Contains(got, "447700900123") || strings.Contains(got, "Alice") || !strings.Contains(got, "unlinkat [path]: permission denied") {
+		t.Errorf("path error = %q, want the path dropped and the cause kept", got)
+	}
+
+	plain := errors.New("call 447700900123 failed")
+	if got := r.Err(plain); strings.Contains(got, "447700900123") {
+		t.Errorf("phone digits not masked: %q", got)
+	}
+
+	debug := &Redactor{Debug: true}
+	if got := debug.Err(decrypt); !strings.Contains(got, "@s.whatsapp.net") || strings.Contains(got, "447700900123") {
+		t.Errorf("debug Err = %q, want JIDs kept with phone digits masked", got)
 	}
 }

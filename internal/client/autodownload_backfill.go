@@ -220,7 +220,7 @@ func (c *Client) mediaCached(cand store.AutoDownloadCandidate) bool {
 	info, err := os.Stat(path)
 	if err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
-			c.log.Debugf("Auto-download backfill: cannot inspect cached media for message %s: %v", c.redactor.MsgID(cand.MessageID), err)
+			c.log.Debugf("Auto-download backfill: cannot inspect cached media for message %s: %s", c.redactor.MsgID(cand.MessageID), c.redactor.Err(err))
 		}
 		return false
 	}

@@ -147,7 +147,7 @@ func (c *Client) download(ctx context.Context, messageID, chatJID, outputPath st
 		if err := validateCachedMedia(localPath, fileLength, fileSHA256); err == nil {
 			return finalizeDownload(localPath, absPath, resolvedOutput, mediaType, filename)
 		} else {
-			c.log.Warnf("Ignoring invalid cached media for message %s: %v", c.redactor.MsgID(messageID), err)
+			c.log.Warnf("Ignoring invalid cached media for message %s: %s", c.redactor.MsgID(messageID), c.redactor.Err(err))
 		}
 	} else if !errors.Is(statErr, os.ErrNotExist) {
 		return DownloadResult{Success: false, Message: fmt.Sprintf("failed to inspect media cache: %v", statErr)}
@@ -195,7 +195,7 @@ func (c *Client) download(ctx context.Context, messageID, chatJID, outputPath st
 		} else if revoked {
 			return DownloadResult{Success: false, Message: errMessageRevoked.Error(), err: errMessageRevoked}
 		}
-		c.log.Infof("Media link for message %s no longer works (%v)", c.redactor.MsgID(messageID), err)
+		c.log.Infof("Media link for message %s no longer works (%s)", c.redactor.MsgID(messageID), c.redactor.Err(err))
 		newPath, retryErr := c.recoverMediaPath(ctx, messageID, chatJID, mediaKey)
 		if errors.Is(retryErr, errMessageRevoked) {
 			return DownloadResult{Success: false, Message: errMessageRevoked.Error(), err: errMessageRevoked}
@@ -225,10 +225,10 @@ func (c *Client) download(ctx context.Context, messageID, chatJID, outputPath st
 	// marks the row before removing the directory, so checking the row after
 	// the write leaves no window in which the file survives.
 	if revoked, err := c.mediaRevoked(ctx, chatJID, messageID); err != nil {
-		c.log.Warnf("Failed to check whether message %s was deleted: %v", c.redactor.MsgID(messageID), err)
+		c.log.Warnf("Failed to check whether message %s was deleted: %s", c.redactor.MsgID(messageID), c.redactor.Err(err))
 	} else if revoked {
 		if err := os.RemoveAll(messageDir); err != nil {
-			c.log.Warnf("Failed to remove cached media of revoked message %s: %v", c.redactor.MsgID(messageID), err)
+			c.log.Warnf("Failed to remove cached media of revoked message %s: %s", c.redactor.MsgID(messageID), c.redactor.Err(err))
 		}
 		return DownloadResult{Success: false, Message: errMessageRevoked.Error(), err: errMessageRevoked}
 	}

@@ -1,8 +1,11 @@
 package security
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"net/url"
+	"path"
 	"regexp"
 	"strings"
 )
@@ -11,7 +14,15 @@ import (
 // followed by 10 or more digits. Used to mask phone numbers in debug output.
 var phoneDigitRun = regexp.MustCompile(`\+?\d{10,}`)
 
-// Redactor obscures JIDs and message bodies in log output. A zero-value
+// jidInText matches a WhatsApp JID embedded in free text, such as an error
+// message (user part, optional agent/device, and a WhatsApp server).
+var jidInText = regexp.MustCompile(`[0-9A-Za-z._:+-]+@(?:s\.whatsapp\.net|g\.us|lid|broadcast|newsletter|c\.us|bot|hosted|hosted\.lid)\b`)
+
+// shortExtension matches a plain file extension (".pdf", ".jpeg") that is
+// safe to keep in a redacted filename summary.
+var shortExtension = regexp.MustCompile(`^\.[a-z0-9]{1,5}$`)
+
+// Redactor obscures JIDs, names and message bodies in log output. A zero-value
 // Redactor redacts. Setting Debug=true passes values through unchanged so
 // developers can trace content during active debugging.
 //
@@ -81,6 +92,34 @@ func (r *Redactor) Body(content string) string {
 	return fmt.Sprintf("[%dB: %s]", len(content), kind)
 }
 
+// Name redacts a chat, group, contact or push name for log output.
+//
+// Non-debug: returns the fixed-shape summary "[<len>B: name]".
+// Debug: returns the full name with phone digit runs masked to "****<last5>"
+// (fallback chat names are often the bare phone number).
+func (r *Redactor) Name(name string) string {
+	if r.Debug {
+		return maskPhones(name)
+	}
+	return fmt.Sprintf("[%dB: name]", len(name))
+}
+
+// Filename redacts a media or document filename for log output.
+//
+// Non-debug: returns "[<len>B: file .<ext>]", keeping a short lower-cased
+// extension so the file type stays visible, or "[<len>B: file]" when there
+// is no plain extension. Debug: returns the full filename with phone digit
+// runs masked to "****<last5>".
+func (r *Redactor) Filename(name string) string {
+	if r.Debug {
+		return maskPhones(name)
+	}
+	if ext := strings.ToLower(path.Ext(name)); shortExtension.MatchString(ext) {
+		return fmt.Sprintf("[%dB: file %s]", len(name), ext)
+	}
+	return fmt.Sprintf("[%dB: file]", len(name))
+}
+
 // URL redacts a media CDN URL. Non-debug: returns "<scheme>://<host>/…" if
 // parseable, otherwise "[url]". Debug: returns the full URL.
 func (r *Redactor) URL(raw string) string {
@@ -127,4 +166,34 @@ func last5(s string) string {
 		return digits
 	}
 	return digits[len(digits)-5:]
+}
+
+// Err redacts an error message for log output. Errors from whatsmeow and the
+// file system can name JIDs (a failed decryption lists the senders) or paths
+// (media cache paths contain the chat JID and message ID).
+//
+// Non-debug: a file-system error keeps only its operation and cause, not the
+// path; JIDs in the text are redacted as by JID and phone digit runs masked.
+// Debug: the full message with phone digit runs masked to "****<last5>".
+func (r *Redactor) Err(err error) string {
+	if err == nil {
+		return "<nil>"
+	}
+	if r.Debug {
+		return maskPhones(err.Error())
+	}
+	msg := err.Error()
+	var pe *fs.PathError
+	if errors.As(err, &pe) && pe.Path != "" {
+		msg = strings.ReplaceAll(msg, pe.Path, "[path]")
+	}
+	msg = jidInText.ReplaceAllStringFunc(msg, func(jid string) string {
+		// Drop the device part ("user:12@server") so the tail is the user's.
+		user, suffix := splitJID(jid)
+		if i := strings.IndexByte(user, ':'); i >= 0 {
+			user = user[:i]
+		}
+		return r.JID(user + suffix)
+	})
+	return maskPhones(msg)
 }
