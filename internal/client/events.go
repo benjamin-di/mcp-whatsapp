@@ -188,6 +188,7 @@ func (c *Client) handleMessage(msg *events.Message) {
 		c.log.Warnf("Failed to store message: %v", err)
 		return
 	}
+	c.queueAutoDownload(nm.msg.ChatJID, nm.msg.ID, nm.msg.MediaType, nm.fileLength)
 
 	direction := "<-"
 	if msg.Info.IsFromMe {
@@ -319,6 +320,7 @@ func (c *Client) handleHistorySync(historySync *events.HistorySync) {
 				continue
 			}
 			syncedCount++
+			c.queueAutoDownload(chatJID, nm.msg.ID, nm.msg.MediaType, nm.fileLength)
 			timestamp := evt.Info.Timestamp
 			if nm.msg.MediaType != "" {
 				c.log.Infof("Stored message: [%s] %s -> %s: [%s: %s] %s",
