@@ -146,3 +146,65 @@ func TestRedactor_MsgID_EmptyDebug(t *testing.T) {
 		t.Fatalf("MsgID debug mode empty string should be empty, got %q", got)
 	}
 }
+
+func TestRedactor_Name_NonDebug(t *testing.T) {
+	r := &Redactor{}
+	cases := map[string]string{
+		"":             "[0B: name]",
+		"Alice":        "[5B: name]",
+		"Project Team": "[12B: name]",
+		"447700000001": "[12B: name]",
+		"Zoë":          "[4B: name]",
+	}
+	for in, want := range cases {
+		t.Run(in, func(t *testing.T) {
+			if got := r.Name(in); got != want {
+				t.Fatalf("Name(%q): want %q, got %q", in, want, got)
+			}
+		})
+	}
+}
+
+func TestRedactor_Name_Debug(t *testing.T) {
+	r := &Redactor{Debug: true}
+	if got := r.Name("Project Team"); got != "Project Team" {
+		t.Fatalf("debug mode should pass names through, got %q", got)
+	}
+	// Fallback names are often the bare phone number; mask it like Body.
+	if got, want := r.Name("447700000001"), "****00001"; got != want {
+		t.Fatalf("Name(phone): want %q, got %q", want, got)
+	}
+}
+
+func TestRedactor_Filename_NonDebug(t *testing.T) {
+	r := &Redactor{}
+	cases := map[string]string{
+		"":                       "[0B: file]",
+		"Contract draft.PDF":     "[18B: file .pdf]",
+		"photo.jpeg":             "[10B: file .jpeg]",
+		"README":                 "[6B: file]",
+		"archive.tar.gz":         "[14B: file .gz]",
+		"notes.verylongext":      "[17B: file]",
+		"Alice Smith passport.":  "[21B: file]",
+		"image_abc123.jpg":       "[16B: file .jpg]",
+		"report.p d f":           "[12B: file]",
+		"Call +15551234567.docx": "[22B: file .docx]",
+	}
+	for in, want := range cases {
+		t.Run(in, func(t *testing.T) {
+			if got := r.Filename(in); got != want {
+				t.Fatalf("Filename(%q): want %q, got %q", in, want, got)
+			}
+		})
+	}
+}
+
+func TestRedactor_Filename_Debug(t *testing.T) {
+	r := &Redactor{Debug: true}
+	if got := r.Filename("Contract draft.pdf"); got != "Contract draft.pdf" {
+		t.Fatalf("debug mode should pass filenames through, got %q", got)
+	}
+	if got, want := r.Filename("Call +15551234567.docx"), "Call ****34567.docx"; got != want {
+		t.Fatalf("Filename(phone): want %q, got %q", want, got)
+	}
+}

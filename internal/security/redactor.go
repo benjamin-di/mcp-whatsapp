@@ -3,6 +3,7 @@ package security
 import (
 	"fmt"
 	"net/url"
+	"path"
 	"regexp"
 	"strings"
 )
@@ -11,7 +12,11 @@ import (
 // followed by 10 or more digits. Used to mask phone numbers in debug output.
 var phoneDigitRun = regexp.MustCompile(`\+?\d{10,}`)
 
-// Redactor obscures JIDs and message bodies in log output. A zero-value
+// shortExtension matches a plain file extension (".pdf", ".jpeg") that is
+// safe to keep in a redacted filename summary.
+var shortExtension = regexp.MustCompile(`^\.[a-z0-9]{1,5}$`)
+
+// Redactor obscures JIDs, names and message bodies in log output. A zero-value
 // Redactor redacts. Setting Debug=true passes values through unchanged so
 // developers can trace content during active debugging.
 //
@@ -79,6 +84,34 @@ func (r *Redactor) Body(content string) string {
 		kind = "command"
 	}
 	return fmt.Sprintf("[%dB: %s]", len(content), kind)
+}
+
+// Name redacts a chat, group, contact or push name for log output.
+//
+// Non-debug: returns the fixed-shape summary "[<len>B: name]".
+// Debug: returns the full name with phone digit runs masked to "****<last5>"
+// (fallback chat names are often the bare phone number).
+func (r *Redactor) Name(name string) string {
+	if r.Debug {
+		return maskPhones(name)
+	}
+	return fmt.Sprintf("[%dB: name]", len(name))
+}
+
+// Filename redacts a media or document filename for log output.
+//
+// Non-debug: returns "[<len>B: file .<ext>]", keeping a short lower-cased
+// extension so the file type stays visible, or "[<len>B: file]" when there
+// is no plain extension. Debug: returns the full filename with phone digit
+// runs masked to "****<last5>".
+func (r *Redactor) Filename(name string) string {
+	if r.Debug {
+		return maskPhones(name)
+	}
+	if ext := strings.ToLower(path.Ext(name)); shortExtension.MatchString(ext) {
+		return fmt.Sprintf("[%dB: file %s]", len(name), ext)
+	}
+	return fmt.Sprintf("[%dB: file]", len(name))
 }
 
 // URL redacts a media CDN URL. Non-debug: returns "<scheme>://<host>/…" if

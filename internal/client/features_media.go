@@ -44,7 +44,7 @@ func (c *Client) SendPoll(ctx context.Context, recipient, question string, optio
 
 	// Cache option names locally so incoming vote SHA-256 hashes can be reversed.
 	if err := c.store.StorePollMetadata(ctx, resp.ID, recipientJID.String(), options); err != nil {
-		c.log.Warnf("Failed to store poll metadata for %s: %v", resp.ID, err)
+		c.log.Warnf("Failed to store poll metadata for %s: %v", c.redactor.MsgID(resp.ID), err)
 	}
 
 	return SendResult{
