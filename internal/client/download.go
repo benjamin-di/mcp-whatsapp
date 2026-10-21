@@ -47,6 +47,21 @@ func (d *MediaDownloader) GetMediaType() whatsmeow.MediaType {
 	return d.MediaType
 }
 
+// mediaCacheDir returns the directory Download caches a message's media in:
+// <StoreDir>/<chat_sanitized>/<hex(message_id)>.
+func (c *Client) mediaCacheDir(chatJID, messageID string) (string, error) {
+	storeDir, err := filepath.Abs(c.store.Dir())
+	if err != nil {
+		return "", fmt.Errorf("resolve store dir: %w", err)
+	}
+	storeDir = filepath.Clean(storeDir)
+	chatDir := filepath.Clean(filepath.Join(storeDir, strings.ReplaceAll(chatJID, ":", "_")))
+	if !strings.HasPrefix(chatDir, storeDir+string(filepath.Separator)) {
+		return "", errors.New("invalid chat directory: path escapes store")
+	}
+	return filepath.Join(chatDir, hex.EncodeToString([]byte(messageID))), nil
+}
+
 // Download fetches media for a previously-cached message and writes it under
 // <StoreDir>/<chat_sanitized>/<hex(message_id)>/<filename>. If outputPath is non-empty, the
 // decrypted bytes are additionally placed at that location (validated against
@@ -95,16 +110,10 @@ func (c *Client) Download(ctx context.Context, messageID, chatJID, outputPath st
 		}
 	}
 
-	storeDir, err := filepath.Abs(c.store.Dir())
+	messageDir, err := c.mediaCacheDir(chatJID, messageID)
 	if err != nil {
-		return DownloadResult{Success: false, Message: fmt.Sprintf("resolve store dir: %v", err)}
+		return DownloadResult{Success: false, Message: err.Error()}
 	}
-	storeDir = filepath.Clean(storeDir)
-	chatDir := filepath.Clean(filepath.Join(storeDir, strings.ReplaceAll(chatJID, ":", "_")))
-	if !strings.HasPrefix(chatDir, storeDir+string(filepath.Separator)) {
-		return DownloadResult{Success: false, Message: "invalid chat directory: path escapes store"}
-	}
-	messageDir := filepath.Join(chatDir, hex.EncodeToString([]byte(messageID)))
 	if err := os.MkdirAll(messageDir, 0o700); err != nil {
 		return DownloadResult{Success: false, Message: fmt.Sprintf("failed to create chat directory: %v", err)}
 	}
