@@ -49,6 +49,8 @@ type Client struct {
 	redactor         *security.Redactor
 	limiter          *ratelimit.Limiter
 	autoDownload     *autoDownloader // nil unless StartAutoDownload enabled it
+	// autoDownloadBackfill schedules backfill passes; set with autoDownload.
+	autoDownloadBackfill *backfillScheduler
 }
 
 // New constructs a Client. It sets the latest WhatsApp version best-effort,

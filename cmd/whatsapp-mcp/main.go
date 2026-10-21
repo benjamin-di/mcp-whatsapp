@@ -46,6 +46,10 @@ Serve-specific flags (after 'serve'):
   -auto-download-max-mb N
                     Skip auto-download of media over N MiB; 0 = no limit
                     (default: 25, env WHATSAPP_MCP_AUTO_DOWNLOAD_MAX_MB)
+  -auto-download-backfill-days N
+                    Only backfill stored media from the last N days;
+                    0 = no limit (default: 0,
+                    env WHATSAPP_MCP_AUTO_DOWNLOAD_BACKFILL_DAYS)
 `
 
 func main() {

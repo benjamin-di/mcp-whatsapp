@@ -31,6 +31,7 @@ func (c *Client) StartEventHandler() {
 			c.handleHistorySync(v)
 		case *events.Connected:
 			c.log.Infof("Connected to WhatsApp")
+			c.requestAutoDownloadBackfill(backfillAfterConnect)
 		case *events.LoggedOut:
 			c.log.Warnf("Device logged out, please scan QR code to log in again")
 		case *events.OfflineSyncPreview:
@@ -335,6 +336,9 @@ func (c *Client) handleHistorySync(historySync *events.HistorySync) {
 	}
 
 	c.log.Infof("History sync complete. Stored %d messages.", syncedCount)
+	// History arrives in batches; fetch whatever the queue could not take
+	// once they stop coming.
+	c.requestAutoDownloadBackfill(backfillDebounce)
 }
 
 // GetChatName determines the appropriate name for a chat. It checks the

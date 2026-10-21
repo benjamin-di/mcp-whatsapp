@@ -105,22 +105,14 @@ func (c *Client) Download(ctx context.Context, messageID, chatJID, outputPath st
 		}
 	}
 
-	storeDir, err := filepath.Abs(c.store.Dir())
+	messageDir, localPath, err := c.mediaCachePath(messageID, chatJID, filename)
 	if err != nil {
-		return DownloadResult{Success: false, Message: fmt.Sprintf("resolve store dir: %v", err)}
+		return DownloadResult{Success: false, Message: err.Error()}
 	}
-	storeDir = filepath.Clean(storeDir)
-	chatDir := filepath.Clean(filepath.Join(storeDir, strings.ReplaceAll(chatJID, ":", "_")))
-	if !strings.HasPrefix(chatDir, storeDir+string(filepath.Separator)) {
-		return DownloadResult{Success: false, Message: "invalid chat directory: path escapes store"}
-	}
-	messageDir := filepath.Join(chatDir, hex.EncodeToString([]byte(messageID)))
 	if err := os.MkdirAll(messageDir, 0o700); err != nil {
 		return DownloadResult{Success: false, Message: fmt.Sprintf("failed to create chat directory: %v", err)}
 	}
 
-	safeName := security.SafeFilename(filename)
-	localPath := filepath.Join(messageDir, safeName)
 	absPath, err := filepath.Abs(localPath)
 	if err != nil {
 		return DownloadResult{Success: false, Message: fmt.Sprintf("failed to get absolute path: %v", err)}
@@ -190,6 +182,23 @@ func (c *Client) Download(ctx context.Context, messageID, chatJID, outputPath st
 
 	c.log.Infof("Successfully downloaded %s media (%d bytes)", mediaType, len(data))
 	return finalizeDownload(localPath, absPath, resolvedOutput, mediaType, filename)
+}
+
+// mediaCachePath returns the cache directory and file path Download uses
+// for a message's media: <StoreDir>/<chat_sanitized>/<hex(message_id)>/
+// <safe filename>. It does not touch the file system.
+func (c *Client) mediaCachePath(messageID, chatJID, filename string) (messageDir, localPath string, err error) {
+	storeDir, err := filepath.Abs(c.store.Dir())
+	if err != nil {
+		return "", "", fmt.Errorf("resolve store dir: %v", err)
+	}
+	storeDir = filepath.Clean(storeDir)
+	chatDir := filepath.Clean(filepath.Join(storeDir, strings.ReplaceAll(chatJID, ":", "_")))
+	if !strings.HasPrefix(chatDir, storeDir+string(filepath.Separator)) {
+		return "", "", errors.New("invalid chat directory: path escapes store")
+	}
+	messageDir = filepath.Join(chatDir, hex.EncodeToString([]byte(messageID)))
+	return messageDir, filepath.Join(messageDir, security.SafeFilename(filename)), nil
 }
 
 func validateCachedMedia(path string, fileLength uint64, fileSHA256 []byte) error {
