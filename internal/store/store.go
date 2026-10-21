@@ -226,6 +226,38 @@ func (s *Store) GetMediaInfo(id, chatJID string) (mediaType, filename, url, dire
 	return
 }
 
+// UpdateMediaDirectPath replaces the stored CDN direct path of a media
+// message, e.g. with the fresh path the phone answered after re-uploading
+// media whose old path had expired. The other media fields stay unchanged.
+// A message deleted for everyone whose media fields were cleared (see
+// ApplyRevoke) is not given a path again and reads as missing.
+func (s *Store) UpdateMediaDirectPath(id, chatJID, directPath string) error {
+	res, err := s.db.Exec(
+		"UPDATE messages SET direct_path = ? WHERE id = ? AND chat_jid = ? AND NOT (revoked_at IS NOT NULL AND media_type = '')",
+		directPath, id, chatJID,
+	)
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err == nil && n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+// GetMessageOrigin returns the cached sender (user part, LID-resolved where
+// possible) and from-me flag of a message: the key fields a media retry
+// receipt needs besides the message and chat IDs.
+func (s *Store) GetMessageOrigin(id, chatJID string) (sender string, isFromMe bool, err error) {
+	var snd sql.NullString
+	var fromMe sql.NullBool
+	err = s.db.QueryRow(
+		"SELECT sender, is_from_me FROM messages WHERE id = ? AND chat_jid = ?",
+		id, chatJID,
+	).Scan(&snd, &fromMe)
+	return snd.String, fromMe.Bool, err
+}
+
 // GetNewestMessage returns the latest message row for a chat, used by the
 // history-sync code to anchor the request.
 func (s *Store) GetNewestMessage(chatJID string) (id string, ts time.Time, isFromMe bool, err error) {
