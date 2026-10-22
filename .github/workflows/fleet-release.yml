@@ -104,7 +104,7 @@ jobs:
                --tmpfs /home/app/store:uid=1000,gid=1000,mode=0700 -e WHATSAPP_MCP_ADDR=0.0.0.0:8765)
 
           # A remote bind refuses to start without its bearer (before any network use).
-          rc=0; timeout 60 docker run --rm --network none "${run[@]}" "$image" serve -allow-remote -read-only || rc=$?
+          rc=0; timeout 60 docker run --rm --network none "${run[@]}" "$image" serve -allow-remote || rc=$?
           [ "$rc" = 2 ] || { echo "ERROR: expected a refusal without WHATSAPP_MCP_TOKEN, got exit $rc" >&2; exit 1; }
 
           # Serving needs the network: an unpaired daemon starts pairing at boot and exits when WhatsApp is
@@ -112,7 +112,7 @@ jobs:
           # image's CA certificates.
           name="smoke-${VCS_REF:0:12}"
           docker run -d --name "$name" "${run[@]}" -e WHATSAPP_MCP_TOKEN=smoke-token "$image" \
-            serve -allow-remote -read-only >/dev/null
+            serve -allow-remote >/dev/null
           trap 'docker logs "$name" 2>&1 | tail -40; docker rm -f "$name" >/dev/null 2>&1 || true; rm -f "$lookup_error"' EXIT
           for _ in $(seq 30); do docker exec "$name" whatsapp-mcp healthcheck >/dev/null 2>&1 && break; sleep 1; done
           docker exec "$name" whatsapp-mcp healthcheck
@@ -127,16 +127,13 @@ jobs:
           # A JSON body, or one server-sent event carrying it.
           body="$(mcp -H 'authorization: Bearer smoke-token' -d "$list")"
           tools="$(sed -n 's/^data: //p' <<<"$body" | grep . || printf '%s' "$body")"
-          # Read-only mode registers only tools the server itself annotates read-only (nothing that sends, reacts,
-          # edits, deletes or changes a chat), plus the two internal/mcp/tools_readonly_test.go excepts: they reach
-          # only the CDN and the account's own phone.
-          jq -e '.result.tools | length > 0
-                 and ([.[] | select(.annotations.readOnlyHint != true) | .name] - ["download_media", "request_sync"] == [])
-                 and ([.[].name] | any(startswith("send_")) | not)' <<<"$tools" >/dev/null || {
-            echo "ERROR: read-only tools/list: $(jq -c '[.result.tools[] | {name, ro: .annotations.readOnlyHint}]' <<<"$tools")" >&2
+          # Deployments serve every tool (no -read-only): the full surface, sends included, behind the bearer.
+          jq -e '.result.tools | length == 42
+                 and ([.[].name] | index("send_message") != null and index("get_status") != null)' <<<"$tools" >/dev/null || {
+            echo "ERROR: tools/list: $(jq -c '[.result.tools[].name]' <<<"$tools")" >&2
             exit 1
           }
-          echo "read-only tools: $(jq -r '[.result.tools[].name] | join(",")' <<<"$tools")"
+          echo "tools: $(jq -r '[.result.tools[].name] | join(",")' <<<"$tools")"
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
       - name: Promote to the release tag
