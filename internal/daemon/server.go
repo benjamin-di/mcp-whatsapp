@@ -204,6 +204,10 @@ func authMiddleware(next http.Handler, token string) http.Handler {
 	})
 }
 
+// requiresAuth lists the bearer-gated paths. Everything else is open, which
+// includes the one-time download links at /media/<token> (internal/medialink):
+// the token is their credential, so clients without the bearer token can use
+// them.
 func requiresAuth(path string) bool {
 	if path == "/mcp" || strings.HasPrefix(path, "/mcp/") {
 		return true

@@ -15,6 +15,7 @@ import (
 	"github.com/sealjay/mcp-whatsapp/internal/client"
 	"github.com/sealjay/mcp-whatsapp/internal/daemon"
 	mcpsrv "github.com/sealjay/mcp-whatsapp/internal/mcp"
+	"github.com/sealjay/mcp-whatsapp/internal/medialink"
 	"github.com/sealjay/mcp-whatsapp/internal/security"
 	"github.com/sealjay/mcp-whatsapp/internal/store"
 )
@@ -23,16 +24,29 @@ func runServe(storeDir string, redactor *security.Redactor, args []string) int {
 	var (
 		addr        string
 		allowRemote bool
+		publicURL   string
 	)
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	fs.StringVar(&addr, "addr", "", "HTTP bind address (default: 127.0.0.1:8765, env WHATSAPP_MCP_ADDR)")
 	fs.BoolVar(&allowRemote, "allow-remote", false, "allow binding to a non-loopback address")
+	fs.StringVar(&publicURL, "public-url", "", "address clients reach this daemon at, e.g. https://example.com/whatsapp; enables download_media's one-time download links (env WHATSAPP_MCP_PUBLIC_URL)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 
 	addr = resolveAddr(addr)
+	if publicURL == "" {
+		publicURL = os.Getenv("WHATSAPP_MCP_PUBLIC_URL")
+	}
+	var links *medialink.Registry
+	if publicURL != "" {
+		var err error
+		if links, err = medialink.New(publicURL); err != nil {
+			fmt.Fprintf(os.Stderr, "-public-url: %v\n", err)
+			return 2
+		}
+	}
 	if !allowRemote && !isLoopbackAddr(addr) {
 		fmt.Fprintf(os.Stderr, "refusing to bind to non-loopback address %q; pass -allow-remote if you mean it\n", addr)
 		return 2
@@ -112,6 +126,10 @@ func runServe(storeDir string, redactor *security.Redactor, args []string) int {
 	}
 
 	mcpServer := mcpsrv.NewServer(c, d.Cache())
+	if links != nil {
+		mcpServer.SetMediaLinks(links)
+		fmt.Fprintf(os.Stderr, "download links: on, served at %s (each link is its own credential and works once)\n", medialink.PathPrefix)
+	}
 	d.SetMCPMount(mcpServer.AttachHTTP)
 
 	fmt.Fprintf(os.Stderr, "whatsapp-mcp listening on http://%s (MCP at /mcp, pairing at /pair)\n", addr)

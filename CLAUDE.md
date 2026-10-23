@@ -10,6 +10,7 @@ internal/client/        whatsmeow client wrapper (send, download, events, histor
 internal/daemon/        HTTP server, pairing state machine, /pair endpoint
 internal/mcp/           mark3labs/mcp-go v1 server + tool registrations
 internal/media/         ogg analysis + ffmpeg shell-out
+internal/medialink/     one-time download links for decrypted media (download_media link: true, served at /media/)
 internal/security/      path allowlisting, filename sanitisation, log redaction
 internal/store/         SQLite cache + queries + LID resolution + formatters
 scripts/mdtest-parity.sh  whatsmeow API drift canary

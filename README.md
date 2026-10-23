@@ -83,11 +83,14 @@ Paths outside the root, including symlinks that resolve outside it, are rejected
 
 > When calling the WhatsApp MCP's `download_media`, always pass `output_path` set to a path under your shared workspace. Without it the decrypted file lands only in the daemon's local cache, which is outside your sandbox and unreadable. `output_path` must live under `WHATSAPP_MCP_MEDIA_ROOT` on the daemon side; the basename is yours to pick.
 
+**Remote clients** (on another machine, or hosted ones such as claude.ai) see images and voice notes up to 5 MiB inline, but cannot reach videos or documents in the cache at all, and cannot hand any file to another tool. Start `serve` with `-public-url` set to the address clients reach the daemon at, and `download_media` with `link: true` adds `Link` to its result: a one-time address of the decrypted file that needs no credentials, valid for 10 minutes and good for one download (`GET <public-url>/media/<token>`; a `HEAD` does not use it up). A client, or another server that imports files from a URL, fetches the file from there. The token in the link is its only credential, so treat the link like the file itself; links are kept in memory, so restarting the daemon revokes them. If a reverse proxy sits in front of the daemon, it must forward `/media/` as well as `/mcp`.
+
 ### Serve flags and environment
 
 - `-addr host:port` (env `WHATSAPP_MCP_ADDR`, default `127.0.0.1:8765`).
 - `-allow-remote`: bind a non-loopback address. Requires `WHATSAPP_MCP_TOKEN`, a bearer token for `/mcp` and `/pair/*`; `serve` exits without it.
 - `WHATSAPP_MCP_MEDIA_ROOT`: the file allowlist root above.
+- `-public-url URL` (env `WHATSAPP_MCP_PUBLIC_URL`): the address clients reach the daemon at, e.g. `https://example.com/whatsapp`; enables `download_media`'s one-time download links (above). Off by default.
 - `WHATSAPP_MCP_DEBUG=1` or `-debug`: verbose logs (see [Debug logging](#debug-logging)).
 
 ## Running the daemon
@@ -141,7 +144,7 @@ Data lives under `./store/` (`-store DIR`): `messages.db` (message cache), `what
 | `list_chats` | List chats with last-message preview; sort by activity or name |
 | `get_chat` | Chat metadata by JID |
 | `get_message_context` | Before/after window around a specific message |
-| `download_media` | Download persisted media to a local path |
+| `download_media` | Download persisted media to a local path (optionally with a one-time download link) |
 | `request_sync` | Ask WhatsApp to backfill history for a chat |
 
 ### Send

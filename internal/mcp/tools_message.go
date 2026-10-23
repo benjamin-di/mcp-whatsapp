@@ -231,17 +231,19 @@ func (s *Server) registerRequestSync() {
 // -- download_media ---------------------------------------------------------
 
 type downloadMediaArgs struct {
-	MessageID  string `json:"message_id"`
-	ChatJID    string `json:"chat_jid"`
-	OutputPath string `json:"output_path"`
+	MessageID  string   `json:"message_id"`
+	ChatJID    string   `json:"chat_jid"`
+	OutputPath string   `json:"output_path"`
+	Link       flexBool `json:"link"`
 }
 
 func (s *Server) registerDownloadMedia() {
 	tool := mcp.NewTool("download_media",
-		mcp.WithDescription("Fetch the encrypted media payload (image, video, audio, document) for a previously-cached message, decrypt it, and write it to a local file under the store directory; returns the absolute path. For image and audio downloads at most 5 MiB, the decrypted bytes are ALSO embedded in the tool result as an ImageContent or AudioContent block so remote MCP clients can view or hear the payload without accessing the daemon's filesystem. Videos and documents are not embedded (too large or not renderable inline). Optionally also writes the decrypted file to `output_path`, which must live under the configured media root (`WHATSAPP_MCP_MEDIA_ROOT`, default `<store>/uploads/`). No notification is sent to the sender or chat. Idempotent — repeated calls for the same message return the cached file path. Prerequisite: the message must contain media; use list_messages to find media message IDs. Returns a JSON object `{Success, Message, MediaType, Filename, Path}` as the first content block, followed by an optional ImageContent/AudioContent block for renderable media."),
+		mcp.WithDescription("Fetch the encrypted media payload (image, video, audio, document) for a previously-cached message, decrypt it, and write it to a local file under the store directory; returns the absolute path. For image and audio downloads at most 5 MiB, the decrypted bytes are ALSO embedded in the tool result as an ImageContent or AudioContent block so remote MCP clients can view or hear the payload without accessing the daemon's filesystem. Videos and documents are not embedded (too large or not renderable inline). Optionally also writes the decrypted file to `output_path`, which must live under the configured media root (`WHATSAPP_MCP_MEDIA_ROOT`, default `<store>/uploads/`). No notification is sent to the sender or chat. Idempotent — repeated calls for the same message return the cached file path. Prerequisite: the message must contain media; use list_messages to find media message IDs. With `link: true` the summary also carries `Link`, a one-time address of the decrypted file that needs no credentials (one download, valid 10 minutes, `LinkExpires`), for handing the file to another server or client that cannot read the daemon's filesystem (e.g. a tool that imports a file from a URL); this requires `serve -public-url`. Returns a JSON object `{Success, Message, MediaType, Filename, Path}` (plus `Link`, `LinkExpires`) as the first content block, followed by an optional ImageContent/AudioContent block for renderable media."),
 		mcp.WithString("message_id", mcp.Required(), mcp.Description("WhatsApp message ID of a media message (use `message_id` from list_messages)")),
 		mcp.WithString("chat_jid", mcp.Required(), mcp.Description(jidDesc)),
 		mcp.WithString("output_path", mcp.Description("optional absolute path under the configured media root (`WHATSAPP_MCP_MEDIA_ROOT`, default `<store>/uploads/`); parent directory must exist; calls are skipped if the file already exists; omit to write only to the daemon cache")),
+		mcp.WithBoolean("link", mcp.Description("also return a one-time download link (`Link`) to the decrypted file; needs `serve -public-url`")),
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(true),
@@ -251,7 +253,18 @@ func (s *Server) registerDownloadMedia() {
 		if a.MessageID == "" || a.ChatJID == "" {
 			return mcp.NewToolResultError("message_id and chat_jid are required"), nil
 		}
+		if bool(a.Link) && s.links == nil {
+			return mcp.NewToolResultError("link: download links are off; start serve with -public-url (env WHATSAPP_MCP_PUBLIC_URL)"), nil
+		}
 		r := s.client.Download(ctx, a.MessageID, a.ChatJID, a.OutputPath)
-		return downloadMediaResult(r)
+		var link string
+		var expires time.Time
+		if bool(a.Link) && r.Success {
+			var err error
+			if link, expires, err = s.links.Issue(r.Path, r.Filename); err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("link: %v", err)), nil
+			}
+		}
+		return downloadMediaResult(r, link, expires)
 	}))
 }
