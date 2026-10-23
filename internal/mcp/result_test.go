@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 
@@ -74,7 +75,7 @@ func TestDownloadMediaResult_ImageInlined(t *testing.T) {
 		Path:      path,
 	}
 
-	res, err := downloadMediaResult(r)
+	res, err := downloadMediaResult(r, "", time.Time{})
 	if err != nil {
 		t.Fatalf("downloadMediaResult: %v", err)
 	}
@@ -111,7 +112,7 @@ func TestDownloadMediaResult_AudioInlined(t *testing.T) {
 		Path:      path,
 	}
 
-	res, err := downloadMediaResult(r)
+	res, err := downloadMediaResult(r, "", time.Time{})
 	if err != nil {
 		t.Fatalf("downloadMediaResult: %v", err)
 	}
@@ -140,7 +141,7 @@ func TestDownloadMediaResult_DocumentPathOnly(t *testing.T) {
 		Path:      path,
 	}
 
-	res, err := downloadMediaResult(r)
+	res, err := downloadMediaResult(r, "", time.Time{})
 	if err != nil {
 		t.Fatalf("downloadMediaResult: %v", err)
 	}
@@ -162,7 +163,7 @@ func TestDownloadMediaResult_VideoPathOnly(t *testing.T) {
 		Path:      path,
 	}
 
-	res, err := downloadMediaResult(r)
+	res, err := downloadMediaResult(r, "", time.Time{})
 	if err != nil {
 		t.Fatalf("downloadMediaResult: %v", err)
 	}
@@ -180,7 +181,7 @@ func TestDownloadMediaResult_FailurePathOnly(t *testing.T) {
 		Message: "failed to download media: download failed with status code 403",
 	}
 
-	res, err := downloadMediaResult(r)
+	res, err := downloadMediaResult(r, "", time.Time{})
 	if err != nil {
 		t.Fatalf("downloadMediaResult: %v", err)
 	}
@@ -202,7 +203,7 @@ func TestDownloadMediaResult_MissingFileFallsBack(t *testing.T) {
 		Path:      filepath.Join(t.TempDir(), "does-not-exist.jpg"),
 	}
 
-	res, err := downloadMediaResult(r)
+	res, err := downloadMediaResult(r, "", time.Time{})
 	if err != nil {
 		t.Fatalf("downloadMediaResult: %v", err)
 	}
@@ -230,11 +231,49 @@ func TestDownloadMediaResult_OversizedNotInlined(t *testing.T) {
 		Path:      path,
 	}
 
-	res, err := downloadMediaResult(r)
+	res, err := downloadMediaResult(r, "", time.Time{})
 	if err != nil {
 		t.Fatalf("downloadMediaResult: %v", err)
 	}
 	if len(res.Content) != 1 {
 		t.Fatalf("expected 1 content block for oversized file, got %d", len(res.Content))
 	}
+}
+
+// TestDownloadMediaResult_Link: a link adds Link and LinkExpires to the JSON
+// summary and leaves the original fields as they were.
+func TestDownloadMediaResult_Link(t *testing.T) {
+	r := client.DownloadResult{
+		Success:   true,
+		Message:   "Successfully downloaded document media",
+		MediaType: "document",
+		Filename:  "contract.pdf",
+		Path:      writeFile(t, "contract.pdf", []byte("%PDF-1.4\n")),
+	}
+	expires := time.Date(2026, 10, 23, 12, 10, 0, 0, time.FixedZone("HKT", 8*3600))
+	res, err := downloadMediaResult(r, "https://example.com/whatsapp/media/tok", expires)
+	if err != nil {
+		t.Fatalf("downloadMediaResult: %v", err)
+	}
+	if len(res.Content) != 1 {
+		t.Fatalf("expected 1 content block for a document, got %d", len(res.Content))
+	}
+	assertJSONSummary(t, res, r)
+	var got struct{ Link, LinkExpires string }
+	if err := json.Unmarshal([]byte(firstText(t, res)), &got); err != nil {
+		t.Fatalf("summary is not JSON: %v", err)
+	}
+	if got.Link != "https://example.com/whatsapp/media/tok" || got.LinkExpires != "2026-10-23T04:10:00Z" {
+		t.Errorf("Link, LinkExpires = %q, %q", got.Link, got.LinkExpires)
+	}
+	if strings.Contains(firstText(t, mustResult(downloadMediaResult(r, "", time.Time{}))), `"Link":`) {
+		t.Error("summary without a link mentions Link")
+	}
+}
+
+func mustResult(res *mcp.CallToolResult, err error) *mcp.CallToolResult {
+	if err != nil {
+		panic(err)
+	}
+	return res
 }

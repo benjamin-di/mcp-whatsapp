@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 
@@ -38,8 +39,19 @@ const inlineMediaMaxBytes = 5 * 1024 * 1024
 // If the file is missing or oversized, the call still succeeds with just the
 // JSON block — the tool is still useful and the caller can fetch the file
 // out of band via Path.
-func downloadMediaResult(r client.DownloadResult) (*mcp.CallToolResult, error) {
-	b, err := json.MarshalIndent(r, "", "  ")
+//
+// A non-empty link (a one-time download link, see internal/medialink) adds
+// Link and LinkExpires to the JSON summary.
+func downloadMediaResult(r client.DownloadResult, link string, linkExpires time.Time) (*mcp.CallToolResult, error) {
+	var summary any = r
+	if link != "" {
+		summary = struct {
+			client.DownloadResult
+			Link        string
+			LinkExpires string
+		}{r, link, linkExpires.UTC().Format(time.RFC3339)}
+	}
+	b, err := json.MarshalIndent(summary, "", "  ")
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("marshal: %v", err)), nil
 	}

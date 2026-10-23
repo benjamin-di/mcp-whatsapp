@@ -8,6 +8,7 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 
 	"github.com/sealjay/mcp-whatsapp/internal/client"
+	"github.com/sealjay/mcp-whatsapp/internal/medialink"
 )
 
 // pairingCache is the minimal pairing-state surface pairing_status needs.
@@ -19,13 +20,15 @@ type pairingCache interface {
 	Expired() bool
 }
 
-// Server holds the MCP server, its bound WhatsApp client, and an optional
-// pairing cache (used only by pairing_status).
+// Server holds the MCP server, its bound WhatsApp client, an optional
+// pairing cache (used only by pairing_status) and optional download links
+// (used only by download_media).
 type Server struct {
 	client   *client.Client
 	mcp      *server.MCPServer
 	cache    pairingCache
 	readOnly bool
+	links    *medialink.Registry
 }
 
 // Option configures NewServer.
@@ -60,14 +63,22 @@ func NewServer(c *client.Client, cache pairingCache, opts ...Option) *Server {
 	return s
 }
 
+// SetMediaLinks enables download_media's one-time download links and serves
+// them at medialink.PathPrefix. Call before AttachHTTP.
+func (s *Server) SetMediaLinks(r *medialink.Registry) { s.links = r }
+
 // MCP returns the underlying mcp-go server (tests only).
 func (s *Server) MCP() *server.MCPServer { return s.mcp }
 
-// AttachHTTP mounts the MCP Streamable HTTP handler on mux at /mcp. The
-// actual listener lifecycle is owned by the caller (internal/daemon).
+// AttachHTTP mounts the MCP Streamable HTTP handler on mux at /mcp, and the
+// download links at medialink.PathPrefix when enabled. The actual listener
+// lifecycle is owned by the caller (internal/daemon).
 func (s *Server) AttachHTTP(mux *http.ServeMux) {
 	// Stateless: nothing here is session-scoped (the pairing cache is process-wide
 	// device state), so legacy clients get no Mcp-Session-Id either.
 	httpHandler := server.NewStreamableHTTPServer(s.mcp, server.WithStateLess(true))
 	mux.Handle("/mcp", httpHandler)
+	if s.links != nil {
+		mux.Handle(medialink.PathPrefix, s.links)
+	}
 }
