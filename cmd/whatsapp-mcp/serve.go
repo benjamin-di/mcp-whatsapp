@@ -24,12 +24,11 @@ import (
 
 func runServe(storeDir string, redactor *security.Redactor, args []string) int {
 	var (
-		addr              string
-		allowRemote       bool
-		readOnly          bool
-		keepRevoked       bool
-		autoDownload      string
-		autoDownloadMaxMB int
+		addr        string
+		allowRemote bool
+		readOnly    bool
+		keepRevoked bool
+		ad          autoDownloadFlags
 	)
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
@@ -39,8 +38,9 @@ func runServe(storeDir string, redactor *security.Redactor, args []string) int {
 	historyFlags.register(fs)
 	fs.BoolVar(&readOnly, "read-only", false, "register only MCP tools that cannot change anything on WhatsApp (env WHATSAPP_MCP_READ_ONLY)")
 	fs.BoolVar(&keepRevoked, "keep-revoked", false, "keep the text and media of cached messages deleted for everyone (env WHATSAPP_MCP_KEEP_REVOKED)")
-	fs.StringVar(&autoDownload, "auto-download", "", "download incoming media of these types automatically: comma list of image,video,audio,document, or all (default: off, env WHATSAPP_MCP_AUTO_DOWNLOAD)")
-	fs.IntVar(&autoDownloadMaxMB, "auto-download-max-mb", client.DefaultAutoDownloadMaxMB, "skip auto-download of media larger than this many MiB; 0 = no limit (env WHATSAPP_MCP_AUTO_DOWNLOAD_MAX_MB)")
+	fs.StringVar(&ad.types, "auto-download", "", "download incoming media of these types automatically: comma list of image,video,audio,document, or all (default: off, env WHATSAPP_MCP_AUTO_DOWNLOAD)")
+	fs.IntVar(&ad.maxMB, "auto-download-max-mb", client.DefaultAutoDownloadMaxMB, "skip auto-download of media larger than this many MiB; 0 = no limit (env WHATSAPP_MCP_AUTO_DOWNLOAD_MAX_MB)")
+	fs.IntVar(&ad.backfillDays, "auto-download-backfill-days", 0, "only backfill stored media from the last N days; 0 = no limit (env WHATSAPP_MCP_AUTO_DOWNLOAD_BACKFILL_DAYS)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -62,11 +62,10 @@ func runServe(storeDir string, redactor *security.Redactor, args []string) int {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		return 2
 	}
-	autoDownloadCfg, err := resolveAutoDownload(
-		autoDownload, flagSet["auto-download"],
-		autoDownloadMaxMB, flagSet["auto-download-max-mb"],
-		os.Getenv,
-	)
+	ad.typesSet = flagSet["auto-download"]
+	ad.maxMBSet = flagSet["auto-download-max-mb"]
+	ad.backfillDaysSet = flagSet["auto-download-backfill-days"]
+	autoDownloadCfg, err := resolveAutoDownload(ad, os.Getenv)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		return 2
@@ -148,7 +147,11 @@ func runServe(storeDir string, redactor *security.Redactor, args []string) int {
 		if autoDownloadCfg.MaxBytes > 0 {
 			limit = fmt.Sprintf("up to %d MiB", autoDownloadCfg.MaxBytes>>20)
 		}
-		fmt.Fprintf(os.Stderr, "auto-download: %s (%s)\n", strings.Join(autoDownloadCfg.TypeList(), ","), limit)
+		backfill := "all stored media"
+		if autoDownloadCfg.BackfillDays > 0 {
+			backfill = fmt.Sprintf("last %d days", autoDownloadCfg.BackfillDays)
+		}
+		fmt.Fprintf(os.Stderr, "auto-download: %s (%s; backfill: %s)\n", strings.Join(autoDownloadCfg.TypeList(), ","), limit, backfill)
 	}
 
 	drv := newProductionDriver(c)
@@ -231,12 +234,23 @@ func resolveKeepRevoked(flagSet, flagValue bool, env string) (bool, error) {
 	return v, nil
 }
 
+// autoDownloadFlags holds the -auto-download* flag values and whether each
+// was set on the command line.
+type autoDownloadFlags struct {
+	types           string
+	typesSet        bool
+	maxMB           int
+	maxMBSet        bool
+	backfillDays    int
+	backfillDaysSet bool
+}
+
 // resolveAutoDownload applies the flag / env / default precedence for the
-// -auto-download and -auto-download-max-mb flags. A flag that was set on the
-// command line wins over its env var, even when set to the empty string.
-func resolveAutoDownload(typesFlag string, typesSet bool, maxMBFlag int, maxMBSet bool, getenv func(string) string) (client.AutoDownloadConfig, error) {
-	spec := typesFlag
-	if !typesSet {
+// -auto-download* flags. A flag that was set on the command line wins over
+// its env var, even when set to the empty string.
+func resolveAutoDownload(f autoDownloadFlags, getenv func(string) string) (client.AutoDownloadConfig, error) {
+	spec := f.types
+	if !f.typesSet {
 		spec = getenv("WHATSAPP_MCP_AUTO_DOWNLOAD")
 	}
 	types, err := client.ParseAutoDownloadTypes(spec)
@@ -244,8 +258,8 @@ func resolveAutoDownload(typesFlag string, typesSet bool, maxMBFlag int, maxMBSe
 		return client.AutoDownloadConfig{}, fmt.Errorf("auto-download: %w", err)
 	}
 
-	maxMB := maxMBFlag
-	if !maxMBSet {
+	maxMB := f.maxMB
+	if !f.maxMBSet {
 		if env := strings.TrimSpace(getenv("WHATSAPP_MCP_AUTO_DOWNLOAD_MAX_MB")); env != "" {
 			maxMB, err = strconv.Atoi(env)
 			if err != nil {
@@ -256,7 +270,21 @@ func resolveAutoDownload(typesFlag string, typesSet bool, maxMBFlag int, maxMBSe
 	if maxMB < 0 || uint64(maxMB) > math.MaxUint64>>20 {
 		return client.AutoDownloadConfig{}, fmt.Errorf("auto-download max size must be 0 (no limit) or a positive number of MiB, got %d", maxMB)
 	}
-	return client.AutoDownloadConfig{Types: types, MaxBytes: uint64(maxMB) << 20}, nil
+
+	days := f.backfillDays
+	if !f.backfillDaysSet {
+		if env := strings.TrimSpace(getenv("WHATSAPP_MCP_AUTO_DOWNLOAD_BACKFILL_DAYS")); env != "" {
+			days, err = strconv.Atoi(env)
+			if err != nil {
+				return client.AutoDownloadConfig{}, fmt.Errorf("WHATSAPP_MCP_AUTO_DOWNLOAD_BACKFILL_DAYS: %q is not a whole number of days", env)
+			}
+		}
+	}
+	// 100 years is far beyond any stored message and keeps AddDate sane.
+	if days < 0 || days > 36500 {
+		return client.AutoDownloadConfig{}, fmt.Errorf("auto-download backfill days must be 0 (no limit) or a positive number of days up to 36500, got %d", days)
+	}
+	return client.AutoDownloadConfig{Types: types, MaxBytes: uint64(maxMB) << 20, BackfillDays: days}, nil
 }
 
 // isLoopbackAddr reports whether addr's host resolves to a loopback IP.
