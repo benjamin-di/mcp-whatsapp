@@ -275,6 +275,14 @@ func (c *Client) handleHistorySync(historySync *events.HistorySync) {
 			}
 			timestamp := time.Unix(int64(msgTS), 0)
 
+			// History messages keep the wrappers live events arrive without
+			// (ephemeral, view-once, document with caption, device-sent, ...).
+			// Edits and other protocol messages are not stored.
+			evt := (&events.Message{RawMessage: msg.Message.GetMessage()}).UnwrapRaw()
+			if evt.IsEdit || evt.Message.GetProtocolMessage() != nil {
+				continue
+			}
+
 			// Determine sender and isFromMe from the message key.
 			var rawSenderJID, senderUser string
 			isFromMe := false
@@ -282,8 +290,14 @@ func (c *Client) handleHistorySync(historySync *events.HistorySync) {
 				if msg.Message.Key.FromMe != nil {
 					isFromMe = *msg.Message.Key.FromMe
 				}
-				if !isFromMe && msg.Message.Key.Participant != nil && *msg.Message.Key.Participant != "" {
-					rawSenderJID = *msg.Message.Key.Participant
+				// Some history payloads carry a group sender only in the
+				// top-level participant field.
+				participant := msg.Message.Key.GetParticipant()
+				if participant == "" {
+					participant = msg.Message.GetParticipant()
+				}
+				if !isFromMe && participant != "" {
+					rawSenderJID = participant
 					senderUser = strings.Split(rawSenderJID, "@")[0]
 				} else if isFromMe {
 					rawSenderJID = ownID + "@s.whatsapp.net"
@@ -305,7 +319,7 @@ func (c *Client) handleHistorySync(historySync *events.HistorySync) {
 			nm := c.normalizeIncomingMessage(
 				rawChatJID, rawSenderJID, senderUser,
 				isGroup, isFromMe, ownID,
-				msgID, timestamp, msg.Message.Message,
+				msgID, timestamp, evt.Message,
 			)
 
 			c.log.Infof("Message content: %s, Media Type: %s", c.redactor.Body(nm.msg.Content), nm.msg.MediaType)
