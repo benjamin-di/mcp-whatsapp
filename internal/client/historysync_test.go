@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -252,5 +253,35 @@ func TestHandleHistorySync_GroupWithoutParticipant(t *testing.T) {
 		if r.chatJID != group || r.sender != "123456789" || r.content != want || r.isFromMe {
 			t.Errorf("%s stored as %+v, want group-sender row with %q", id, r, want)
 		}
+	}
+}
+
+func TestHandleHistorySync_PollCreation(t *testing.T) {
+	s := newTestStoreWithLIDMap(t, nil)
+	c := newHistoryTestClient(t, s)
+
+	const chat = "447700000001@s.whatsapp.net"
+	if err := s.StoreChat(chat, "Alice", time.Now()); err != nil {
+		t.Fatalf("seed chat: %v", err)
+	}
+
+	runHistorySync(c, chat, historyMsg(historyKey(chat, "poll-1", false, ""), &waProto.Message{
+		EphemeralMessage: &waProto.FutureProofMessage{Message: &waProto.Message{
+			PollCreationMessage: &waProto.PollCreationMessage{
+				Name: proto.String("Lunch?"),
+				Options: []*waProto.PollCreationMessage_Option{
+					{OptionName: proto.String("Yes")},
+					{OptionName: proto.String("No")},
+				},
+			},
+		}},
+	}))
+
+	if r := mustStored(t, s, "poll-1"); r.content != "[poll] Lunch?" {
+		t.Errorf("poll-1 content = %q, want \"[poll] Lunch?\"", r.content)
+	}
+	opts, err := s.GetPollOptions(context.Background(), "poll-1", chat)
+	if err != nil || len(opts) != 2 || opts[0] != "Yes" || opts[1] != "No" {
+		t.Errorf("poll options = %v, %v; want [Yes No]", opts, err)
 	}
 }
