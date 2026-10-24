@@ -23,6 +23,8 @@ Data lives under `./store/` (override with `-store DIR`): `messages.db`, `whatsa
 - `serve` — HTTP daemon on `127.0.0.1:<port>`; tracks events + serves MCP at `/mcp`; pairing UI at `/pair`. Holds `store/.lock` while running and is mutually exclusive with any other `serve` instance using the same store directory.
 - `smoke` — boot-test without connecting to WhatsApp.
 
+`login` and `serve` both accept `-full-history`, `-history-days N` and `-history-size-mb N` (env `WHATSAPP_MCP_FULL_HISTORY`, `WHATSAPP_MCP_HISTORY_DAYS`, `WHATSAPP_MCP_HISTORY_SIZE_MB`; flag wins). They are parsed in `cmd/whatsapp-mcp/history_flags.go` into `client.PairingHistory`, which `client.New` writes into whatsmeow's package-level `store.DeviceProps` (`RequireFullSync` + `HistorySyncConfig`) before any connect (`internal/client/pairing_history.go`). They only affect a new pairing; the phone decides what it sends.
+
 ## Testing
 
 ```bash

@@ -55,6 +55,25 @@ Scan the QR with WhatsApp (*Settings → Linked Devices → Link a Device*). The
 - **No QR scan:** use the phone-number form on `/pair` (or `login -phone +<international number>`), then type the code into *Link a Device → Link with phone number instead*.
 - The `/pair/*` endpoints are CSRF-protected and rate-limited (15 GET/min, 1 reset/min, 3 code requests/min).
 
+#### Full history at pairing
+
+WhatsApp sends history to a linked device only while it pairs, and by default the phone sends a recent window of about three months. To ask for more, pass the flags to whichever command does the pairing (`login`, or `serve` when you pair through `/pair`):
+
+```bash
+./bin/whatsapp-mcp login -full-history -history-days 3650 -history-size-mb 4096
+```
+
+- `-full-history` (env `WHATSAPP_MCP_FULL_HISTORY=1`): ask the phone for a full history sync instead of the recent window.
+- `-history-days N` (env `WHATSAPP_MCP_HISTORY_DAYS`, 0–36500, default 0 = phone decides): how far back the full sync goes.
+- `-history-size-mb N` (env `WHATSAPP_MCP_HISTORY_SIZE_MB`, 0–102400, default 0 = phone decides): how many megabytes the phone may put into it. The storage quota advertised to the phone is raised to match when it is lower.
+
+The days and size limits need `-full-history`; a flag wins over its environment variable. Things to know:
+
+- **New pairings only.** The request travels in the pairing handshake, so an already-linked device gets nothing more. Unlink and pair again with the flags: either use the reset on `/pair` while `serve` runs with them, or remove the device under *Linked Devices* on the phone, delete `store/whatsapp.db` and run `login` with them.
+- **The phone decides.** These are requests; WhatsApp may send less than asked, and limits and behaviour vary by phone and account.
+- **It takes time.** A full sync can run for a long while after pairing. Keep the phone online and charging, and keep `serve` running until the history sync log lines stop.
+- **Storage.** A full sync can grow `messages.db` substantially: every message it delivers is stored (media itself is fetched only on demand by `download_media`).
+
 ### Connect your MCP client
 
 `serve` listens on `127.0.0.1:8765` (or `$WHATSAPP_MCP_ADDR`) and serves MCP at `/mcp`. It is stateless (no `Mcp-Session-Id`) and speaks MCP 2026-07-28 as well as older revisions.
@@ -89,6 +108,7 @@ Paths outside the root, including symlinks that resolve outside it, are rejected
 - `-allow-remote`: bind a non-loopback address. Requires `WHATSAPP_MCP_TOKEN`, a bearer token for `/mcp` and `/pair/*`; `serve` exits without it.
 - `WHATSAPP_MCP_MEDIA_ROOT`: the file allowlist root above.
 - `WHATSAPP_MCP_DEBUG=1` or `-debug`: verbose logs (see [Debug logging](#debug-logging)).
+- `-full-history`, `-history-days N`, `-history-size-mb N` (env `WHATSAPP_MCP_FULL_HISTORY`, `WHATSAPP_MCP_HISTORY_DAYS`, `WHATSAPP_MCP_HISTORY_SIZE_MB`): how much history to ask for when pairing through `/pair` (see [Full history at pairing](#full-history-at-pairing)).
 
 ## Running the daemon
 

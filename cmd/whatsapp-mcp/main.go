@@ -39,6 +39,11 @@ Global flags (before the command):
 Serve-specific flags (after 'serve'):
   -addr host:port   HTTP bind address (default: 127.0.0.1:8765, env WHATSAPP_MCP_ADDR)
   -allow-remote     Allow binding to a non-loopback address (dangerous)
+
+Pairing history flags (after 'login' or 'serve'; only affect a new pairing):
+  -full-history         Ask the phone for a full history sync (env WHATSAPP_MCP_FULL_HISTORY)
+  -history-days N       With -full-history: days to ask for, 0 = phone default (env WHATSAPP_MCP_HISTORY_DAYS)
+  -history-size-mb N    With -full-history: MB the phone may send, 0 = phone default (env WHATSAPP_MCP_HISTORY_SIZE_MB)
 `
 
 func main() {

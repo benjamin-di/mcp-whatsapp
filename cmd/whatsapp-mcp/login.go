@@ -18,10 +18,19 @@ func runLogin(storeDir string, redactor *security.Redactor, args []string) int {
 	fs.SetOutput(os.Stderr)
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "whatsapp-mcp login: pair this device via QR (or a phone-number pairing code with -phone); writes session to <store>/whatsapp.db. Ctrl-C aborts.")
-		fmt.Fprintln(os.Stderr, "\nUsage: whatsapp-mcp [-store DIR] login [-phone +<international number>]")
+		fmt.Fprintln(os.Stderr, "\nUsage: whatsapp-mcp [-store DIR] login [-phone +<international number>] [-full-history [-history-days N] [-history-size-mb N]]")
+		fmt.Fprintln(os.Stderr)
+		fs.PrintDefaults()
 	}
 	phone := fs.String("phone", "", "pair by phone number instead of QR: enter the printed code in WhatsApp (international format, e.g. +919876543210)")
+	var historyFlags pairingHistoryFlags
+	historyFlags.register(fs)
 	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	history, err := historyFlags.resolve(fs, os.Getenv)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "login: %v\n", err)
 		return 2
 	}
 
@@ -46,8 +55,9 @@ func runLogin(storeDir string, redactor *security.Redactor, args []string) int {
 		StoreDir: storeDir,
 		Store:    st,
 		// login flow logs normally to stderr; the QR itself goes to stdout.
-		Logger:   client.NewStderrLogger("Client", "INFO", true),
-		Redactor: redactor,
+		Logger:         client.NewStderrLogger("Client", "INFO", true),
+		Redactor:       redactor,
+		PairingHistory: history,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "init client: %v\n", err)
