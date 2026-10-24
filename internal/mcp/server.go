@@ -21,25 +21,39 @@ type pairingCache interface {
 // Server holds the MCP server, its bound WhatsApp client, and an optional
 // pairing cache (used only by pairing_status).
 type Server struct {
-	client *client.Client
-	mcp    *server.MCPServer
-	cache  pairingCache
+	client   *client.Client
+	mcp      *server.MCPServer
+	cache    pairingCache
+	readOnly bool
 }
 
-// NewServer constructs an MCP server with all tools registered against the
-// provided WhatsApp client. cache may be nil (smoke/tests); pairing_status is
-// the only tool that consults it.
+// Option configures NewServer.
+type Option func(*Server)
+
+// WithReadOnly registers only the tools readOnlyPolicies marks
+// keepInReadOnly: nothing that sends, changes account or group state, or
+// queries WhatsApp about third parties. get_status reports the mode.
+func WithReadOnly(readOnly bool) Option {
+	return func(s *Server) { s.readOnly = readOnly }
+}
+
 // Version is reported as serverInfo.version. cmd/whatsapp-mcp sets it from its
 // -ldflags build version so the two cannot drift.
 var Version = "dev"
 
-func NewServer(c *client.Client, cache pairingCache) *Server {
-	mcpSrv := server.NewMCPServer(
-		"whatsapp",
-		Version,
-		server.WithToolCapabilities(true),
-	)
-	s := &Server{client: c, mcp: mcpSrv, cache: cache}
+// NewServer constructs an MCP server with all tools registered against the
+// provided WhatsApp client. cache may be nil (smoke/tests); pairing_status is
+// the only tool that consults it.
+func NewServer(c *client.Client, cache pairingCache, opts ...Option) *Server {
+	s := &Server{client: c, cache: cache}
+	for _, opt := range opts {
+		opt(s)
+	}
+	serverOpts := []server.ServerOption{server.WithToolCapabilities(true)}
+	if s.readOnly {
+		serverOpts = append(serverOpts, server.WithInstructions(readOnlyInstructions))
+	}
+	s.mcp = server.NewMCPServer("whatsapp", Version, serverOpts...)
 	s.registerTools()
 	s.registerResources()
 	return s

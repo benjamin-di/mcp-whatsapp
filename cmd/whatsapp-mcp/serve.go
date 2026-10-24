@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"syscall"
 
 	"github.com/sealjay/mcp-whatsapp/internal/client"
@@ -23,6 +24,7 @@ func runServe(storeDir string, redactor *security.Redactor, args []string) int {
 	var (
 		addr        string
 		allowRemote bool
+		readOnly    bool
 	)
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
@@ -30,12 +32,25 @@ func runServe(storeDir string, redactor *security.Redactor, args []string) int {
 	fs.BoolVar(&allowRemote, "allow-remote", false, "allow binding to a non-loopback address")
 	var historyFlags pairingHistoryFlags
 	historyFlags.register(fs)
+	fs.BoolVar(&readOnly, "read-only", false, "register only MCP tools that cannot change anything on WhatsApp (env WHATSAPP_MCP_READ_ONLY)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	history, err := historyFlags.resolve(fs, os.Getenv)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "serve: %v\n", err)
+		return 2
+	}
+
+	readOnlySet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "read-only" {
+			readOnlySet = true
+		}
+	})
+	readOnly, err = resolveReadOnly(readOnlySet, readOnly, os.Getenv("WHATSAPP_MCP_READ_ONLY"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
 		return 2
 	}
 
@@ -119,8 +134,11 @@ func runServe(storeDir string, redactor *security.Redactor, args []string) int {
 		return 1
 	}
 
-	mcpServer := mcpsrv.NewServer(c, d.Cache())
+	mcpServer := mcpsrv.NewServer(c, d.Cache(), mcpsrv.WithReadOnly(readOnly))
 	d.SetMCPMount(mcpServer.AttachHTTP)
+	if readOnly {
+		fmt.Fprintf(os.Stderr, "read-only mode: %d MCP tools registered; send and action tools are disabled\n", len(mcpServer.MCP().ListTools()))
+	}
 
 	fmt.Fprintf(os.Stderr, "whatsapp-mcp listening on http://%s (MCP at /mcp, pairing at /pair)\n", addr)
 	if !c.IsLoggedIn() {
@@ -142,6 +160,25 @@ func resolveAddr(flagValue string) string {
 		return env
 	}
 	return "127.0.0.1:8765"
+}
+
+// resolveReadOnly applies the -read-only / WHATSAPP_MCP_READ_ONLY / default
+// (off) precedence. An explicitly set flag wins, including -read-only=false.
+// The env var accepts strconv.ParseBool values ("1", "true", "0", "false",
+// ...); anything else is an error so a typo cannot silently leave send tools
+// enabled.
+func resolveReadOnly(flagSet, flagValue bool, env string) (bool, error) {
+	if flagSet {
+		return flagValue, nil
+	}
+	if env == "" {
+		return false, nil
+	}
+	v, err := strconv.ParseBool(env)
+	if err != nil {
+		return false, fmt.Errorf("WHATSAPP_MCP_READ_ONLY=%q: want 1/true or 0/false", env)
+	}
+	return v, nil
 }
 
 // isLoopbackAddr reports whether addr's host resolves to a loopback IP.
