@@ -482,7 +482,7 @@ func (c *Client) handlePollVote(msg *events.Message, chatJID, voterJID string) {
 
 	vote, err := c.wa.DecryptPollVote(ctx, msg)
 	if err != nil {
-		c.log.Warnf("Failed to decrypt poll vote from %s in %s: %v", c.redactor.JID(voterJID), c.redactor.JID(chatJID), err)
+		c.log.Warnf("Failed to decrypt poll vote from %s in %s: %s", c.redactor.JID(voterJID), c.redactor.JID(chatJID), c.redactor.Err(err))
 		return
 	}
 
