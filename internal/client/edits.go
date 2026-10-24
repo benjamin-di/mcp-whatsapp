@@ -67,8 +67,8 @@ func (c *Client) messageChangeOf(ctx context.Context, m *waProto.Message, evt *e
 	}
 	decrypted, err := c.wa.DecryptSecretEncryptedMessage(ctx, &events.Message{Info: evt.Info, Message: m})
 	if err != nil {
-		c.log.Warnf("Failed to decrypt edit of %s in %s: %v",
-			c.redactor.MsgID(enc.GetTargetMessageKey().GetID()), c.redactor.JID(evt.Info.Chat.String()), err)
+		c.log.Warnf("Failed to decrypt edit of %s in %s: %s",
+			c.redactor.MsgID(enc.GetTargetMessageKey().GetID()), c.redactor.JID(evt.Info.Chat.String()), c.redactor.Err(err))
 		return messageChange{}, false
 	}
 	content := (&events.Message{RawMessage: decrypted}).UnwrapRaw().Message
@@ -212,7 +212,7 @@ func (c *Client) isGroupAdmin(ctx context.Context, group types.JID, ids ...types
 	defer cancel()
 	info, err := lookup(ctx, group)
 	if err != nil {
-		c.log.Warnf("Failed to check admins of %s: %v", c.redactor.JID(group.String()), err)
+		c.log.Warnf("Failed to check admins of %s: %s", c.redactor.JID(group.String()), c.redactor.Err(err))
 		return false
 	}
 	p := findParticipant(info, ids...)
@@ -233,7 +233,7 @@ func (c *Client) revoke(ctx context.Context, chatJID, id string, author store.Au
 		err = os.RemoveAll(dir)
 	}
 	if err != nil {
-		c.log.Warnf("Failed to remove cached media of revoked message %s: %v", c.redactor.MsgID(id), err)
+		c.log.Warnf("Failed to remove cached media of revoked message %s: %s", c.redactor.MsgID(id), c.redactor.Err(err))
 	}
 	return true, nil
 }

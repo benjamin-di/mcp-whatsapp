@@ -134,11 +134,11 @@ func (c *Client) runMediaRetry(ctx context.Context, call *mediaRetryCall, chatJI
 	}
 	if err == nil {
 		if perr := c.store.UpdateMediaDirectPath(call.messageID, chatJID, directPath); perr != nil {
-			c.log.Warnf("Failed to store re-uploaded media path for message %s: %v", c.redactor.MsgID(call.messageID), perr)
+			c.log.Warnf("Failed to store re-uploaded media path for message %s: %s", c.redactor.MsgID(call.messageID), c.redactor.Err(perr))
 		}
 		c.log.Infof("Phone re-uploaded media for message %s", c.redactor.MsgID(call.messageID))
 	} else {
-		c.log.Warnf("Media re-upload for message %s failed: %v", c.redactor.MsgID(call.messageID), err)
+		c.log.Warnf("Media re-upload for message %s failed: %s", c.redactor.MsgID(call.messageID), c.redactor.Err(err))
 	}
 
 	r := &c.mediaRetries
