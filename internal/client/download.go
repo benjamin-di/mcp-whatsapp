@@ -34,6 +34,7 @@ type DownloadResult struct {
 var (
 	errIncompleteMedia = errors.New("incomplete media information for download")
 	errInvalidMedia    = errors.New("downloaded media failed validation")
+	errMessageRevoked  = errors.New("message was deleted for everyone")
 )
 
 // MediaDownloader implements whatsmeow.DownloadableMessage for cached media.
@@ -55,6 +56,21 @@ func (d *MediaDownloader) GetFileSHA256() []byte    { return d.FileSHA256 }
 func (d *MediaDownloader) GetFileEncSHA256() []byte { return d.FileEncSHA256 }
 func (d *MediaDownloader) GetMediaType() whatsmeow.MediaType {
 	return d.MediaType
+}
+
+// mediaCacheDir returns the directory Download caches a message's media in:
+// <StoreDir>/<chat_sanitized>/<hex(message_id)>.
+func (c *Client) mediaCacheDir(chatJID, messageID string) (string, error) {
+	storeDir, err := filepath.Abs(c.store.Dir())
+	if err != nil {
+		return "", fmt.Errorf("resolve store dir: %w", err)
+	}
+	storeDir = filepath.Clean(storeDir)
+	chatDir := filepath.Clean(filepath.Join(storeDir, strings.ReplaceAll(chatJID, ":", "_")))
+	if !strings.HasPrefix(chatDir, storeDir+string(filepath.Separator)) {
+		return "", errors.New("invalid chat directory: path escapes store")
+	}
+	return filepath.Join(chatDir, hex.EncodeToString([]byte(messageID))), nil
 }
 
 // Download fetches media for a previously-cached message and writes it under
@@ -105,16 +121,10 @@ func (c *Client) Download(ctx context.Context, messageID, chatJID, outputPath st
 		}
 	}
 
-	storeDir, err := filepath.Abs(c.store.Dir())
+	messageDir, err := c.mediaCacheDir(chatJID, messageID)
 	if err != nil {
-		return DownloadResult{Success: false, Message: fmt.Sprintf("resolve store dir: %v", err)}
+		return DownloadResult{Success: false, Message: err.Error()}
 	}
-	storeDir = filepath.Clean(storeDir)
-	chatDir := filepath.Clean(filepath.Join(storeDir, strings.ReplaceAll(chatJID, ":", "_")))
-	if !strings.HasPrefix(chatDir, storeDir+string(filepath.Separator)) {
-		return DownloadResult{Success: false, Message: "invalid chat directory: path escapes store"}
-	}
-	messageDir := filepath.Join(chatDir, hex.EncodeToString([]byte(messageID)))
 	if err := os.MkdirAll(messageDir, 0o700); err != nil {
 		return DownloadResult{Success: false, Message: fmt.Sprintf("failed to create chat directory: %v", err)}
 	}
@@ -186,6 +196,20 @@ func (c *Client) Download(ctx context.Context, messageID, chatJID, outputPath st
 	}
 	if err := replaceCacheFile(messageDir, localPath, data); err != nil {
 		return DownloadResult{Success: false, Message: fmt.Sprintf("failed to save media file: %v", err)}
+	}
+	// A revoke that arrived while the media was being fetched has already
+	// removed the cache directory, which the write above recreated. revoke
+	// marks the row before removing the directory, so checking the row after
+	// the write leaves no window in which the file survives.
+	if !c.keepRevoked {
+		if revoked, err := c.store.IsRevoked(ctx, chatJID, messageID); err != nil {
+			c.log.Warnf("Failed to check whether message %s was deleted: %v", c.redactor.MsgID(messageID), err)
+		} else if revoked {
+			if err := os.RemoveAll(messageDir); err != nil {
+				c.log.Warnf("Failed to remove cached media of revoked message %s: %v", c.redactor.MsgID(messageID), err)
+			}
+			return DownloadResult{Success: false, Message: errMessageRevoked.Error(), err: errMessageRevoked}
+		}
 	}
 
 	c.log.Infof("Successfully downloaded %s media (%d bytes)", mediaType, len(data))

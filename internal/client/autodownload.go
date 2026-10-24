@@ -253,10 +253,23 @@ func (c *Client) runAutoDownload(ctx context.Context, job autoDownloadJob) {
 	if failed {
 		return
 	}
+	// A message deleted for everyone has its media cleared unless revoked
+	// content is kept; there is nothing to fetch and nothing to report.
+	if !c.keepRevoked {
+		revoked, err := c.store.IsRevoked(ctx, job.chatJID, job.messageID)
+		if err != nil {
+			c.log.Warnf("Auto-download of message %s in %s skipped: %v", msgID, chat, err)
+			return
+		}
+		if revoked {
+			return
+		}
+	}
 
 	res := c.Download(ctx, job.messageID, job.chatJID, "")
-	if res.Success || ctx.Err() != nil {
-		// On shutdown the media is left for a later download_media call.
+	if res.Success || ctx.Err() != nil || errors.Is(res.err, errMessageRevoked) {
+		// On shutdown the media is left for a later download_media call;
+		// a message deleted while it was fetched has nothing to keep.
 		return
 	}
 

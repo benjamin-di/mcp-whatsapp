@@ -32,11 +32,23 @@ func (s *Store) FormatMessage(ctx context.Context, m Message, showChatInfo bool)
 		senderName = s.GetSenderName(ctx, m.Sender)
 	}
 
+	// A revoked message shows a marker in place of its (cleared) text; the
+	// text is only still there when the server keeps revoked content.
+	content := m.Content
+	switch {
+	case m.Revoked && content == "":
+		content = "[deleted]"
+	case m.Revoked:
+		content = "[deleted] " + content
+	case m.Edited:
+		content = "[edited] " + content
+	}
+
 	b.WriteString("From: ")
 	b.WriteString(senderName)
 	b.WriteString(": ")
 	b.WriteString(contentPrefix)
-	b.WriteString(m.Content)
+	b.WriteString(content)
 	b.WriteString("\n")
 
 	return b.String()
