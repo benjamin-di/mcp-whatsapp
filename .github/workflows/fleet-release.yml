@@ -1,0 +1,158 @@
+name: Fleet release
+
+# Fork-only: builds the fleet branch (upstream main + our open pull-request branches) into
+# ghcr.io/benjamin-di/mcp-whatsapp once, smoke-tests it as a deployment runs it, and promotes that exact digest to
+# the release tag, so a host pins an immutable, rollback-able image until upstream publishes one with our pull
+# requests. A release never re-runs tests: its first job requires fleet-ci.yml's success for the tagged commit.
+#
+#   v0.6.0-fleet.1 tag -> :sha-<12> + :0.6.0-fleet.1
+#   workflow_dispatch  -> :sha-<12> only
+on:
+  push:
+    tags: ['v*-fleet.*']
+  workflow_dispatch: {}
+
+permissions: {}
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    timeout-minutes: 25
+    steps:
+      - name: Require fleet-ci.yml's success for the tagged commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 1200))
+          while :; do
+            runs="$(gh run list -R "$REPO" --workflow fleet-ci.yml --commit "$SHA" --limit 20 \
+              --json status,conclusion,url --jq '.[] | "\(.status) \(.conclusion) \(.url)"')"
+            if grep -q '^completed success ' <<<"$runs"; then echo "fleet-ci.yml passed for ${SHA:0:12}"; exit 0; fi
+            if ! grep -qvE '^completed ' <<<"$runs"; then
+              echo "::error::fleet-ci.yml did not succeed for ${SHA:0:12} (push the commit to fleet first): $(head -1 <<<"$runs")"
+              exit 1
+            fi
+            [ "$SECONDS" -lt "$deadline" ] || { echo "::error::fleet-ci.yml still running after 1200s"; exit 1; }
+            sleep 20
+          done
+
+  build-and-push:
+    needs: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    env:
+      # zstd layers: faster to decompress on the pulling host; Docker >= 23 pulls them.
+      ZSTD_PUSH: type=registry,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
+      REG: ghcr.io/${{ github.repository_owner }}
+      # The pinned curl image the smoke test calls the server with, from inside the server's own network namespace.
+      CURL_IMAGE: curlimages/curl:8.22.0@sha256:58adaa4e8dca9c988bae2aba4ab3434a0bb2da16bbe3f92dec39ec7785166777
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - name: Log in to GHCR
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build, push and smoke-test the candidate
+        id: candidate
+        env:
+          DOCKER_BUILDKIT: "1"
+          VCS_REF: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.ref_type }}" = tag ]; then version="${GITHUB_REF_NAME#v}"; else version="sha-${VCS_REF:0:12}"; fi
+          candidate="$REG/mcp-whatsapp:sha-${VCS_REF:0:12}"
+          lookup_error="$(mktemp)"
+          trap 'rm -f "$lookup_error"' EXIT
+          if docker manifest inspect "$candidate" >/dev/null 2>"$lookup_error"; then
+            docker pull "$candidate"
+            revision="$(docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$candidate")"
+            [ "$revision" = "$VCS_REF" ] || { echo "ERROR: $candidate records unexpected revision $revision" >&2; exit 1; }
+          else
+            # A registry/auth failure is not evidence that an immutable tag is absent.
+            grep -Eqi 'manifest unknown|not found' "$lookup_error" || { cat "$lookup_error" >&2; exit 1; }
+            # The revision label is what `release pin` checks against the tagged commit.
+            docker buildx build --provenance=false --output "$ZSTD_PUSH" --platform linux/amd64 \
+              --build-arg VERSION="$version" \
+              --label org.opencontainers.image.source="https://github.com/${{ github.repository }}" \
+              --label org.opencontainers.image.revision="$VCS_REF" \
+              --label org.opencontainers.image.version="$version" \
+              --cache-from "type=registry,ref=$REG/mcp-whatsapp:buildcache" \
+              --cache-to "type=registry,ref=$REG/mcp-whatsapp:buildcache,mode=max" \
+              -t "$candidate" .
+          fi
+          digest="$(docker manifest inspect --verbose "$candidate" | jq -er '.Descriptor.digest')"
+          image="$REG/mcp-whatsapp@$digest"
+          docker pull -q "$image" >/dev/null
+
+          # As a deployment runs it: uid 1000 (not the image's 10001), read-only root, tmpfs /tmp and store, and no
+          # network, so the unpaired daemon's pairing flow never reaches WhatsApp.
+          run=(--network none --read-only --user 1000:1000 --tmpfs /tmp
+               --tmpfs /home/app/store:uid=1000,gid=1000,mode=0700 -e WHATSAPP_MCP_ADDR=0.0.0.0:8765)
+
+          # A remote bind refuses to start without its bearer.
+          rc=0; timeout 60 docker run --rm "${run[@]}" "$image" serve -allow-remote -read-only || rc=$?
+          [ "$rc" = 2 ] || { echo "ERROR: expected a refusal without WHATSAPP_MCP_TOKEN, got exit $rc" >&2; exit 1; }
+
+          name="smoke-${VCS_REF:0:12}"
+          docker run -d --name "$name" "${run[@]}" -e WHATSAPP_MCP_TOKEN=smoke-token "$image" \
+            serve -allow-remote -read-only >/dev/null
+          trap 'docker logs "$name" 2>&1 | tail -40; docker rm -f "$name" >/dev/null 2>&1 || true; rm -f "$lookup_error"' EXIT
+          for _ in $(seq 30); do docker exec "$name" whatsapp-mcp healthcheck >/dev/null 2>&1 && break; sleep 1; done
+          docker exec "$name" whatsapp-mcp healthcheck
+
+          mcp() {
+            docker run --rm --network "container:$name" "$CURL_IMAGE" -sS -X POST http://127.0.0.1:8765/mcp \
+              -H 'content-type: application/json' -H 'accept: application/json, text/event-stream' "$@"
+          }
+          list='{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+          anon="$(mcp -o /dev/null -w '%{http_code}' -d "$list")"
+          [ "$anon" = 401 ] || { echo "ERROR: tools/list without the bearer got $anon" >&2; exit 1; }
+          # A JSON body, or one server-sent event carrying it.
+          body="$(mcp -H 'authorization: Bearer smoke-token' -d "$list")"
+          tools="$(sed -n 's/^data: //p' <<<"$body" | grep . || printf '%s' "$body")"
+          # Read-only mode registers only tools the server itself annotates read-only (nothing that sends, reacts,
+          # edits, deletes or changes a chat), plus the two internal/mcp/tools_readonly_test.go excepts: they reach
+          # only the CDN and the account's own phone.
+          jq -e '.result.tools | length > 0
+                 and ([.[] | select(.annotations.readOnlyHint != true) | .name] - ["download_media", "request_sync"] == [])
+                 and ([.[].name] | any(startswith("send_")) | not)' <<<"$tools" >/dev/null || {
+            echo "ERROR: read-only tools/list: $(jq -c '[.result.tools[] | {name, ro: .annotations.readOnlyHint}]' <<<"$tools")" >&2
+            exit 1
+          }
+          echo "read-only tools: $(jq -r '[.result.tools[].name] | join(",")' <<<"$tools")"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Promote to the release tag
+        if: github.event_name == 'push' && github.ref_type == 'tag'
+        env:
+          DIGEST: ${{ steps.candidate.outputs.digest }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-fleet\.[0-9]+$ ]] || { echo "bad tag $GITHUB_REF_NAME" >&2; exit 2; }
+          release="$REG/mcp-whatsapp:$version"
+          manifest_digest() { docker buildx imagetools inspect "$1" --format '{{json .Manifest}}' | jq -er '.digest'; }
+          error_file="$(mktemp)"
+          if current="$(manifest_digest "$release" 2>"$error_file")"; then
+            [ "$current" = "$DIGEST" ] || { echo "immutable ref conflict: $release" >&2; exit 1; }
+          else
+            grep -Eqi 'manifest unknown|not found' "$error_file" || { cat "$error_file" >&2; exit 1; }
+            docker buildx imagetools create --prefer-index=false --tag "$release" "$REG/mcp-whatsapp@$DIGEST"
+          fi
+          [ "$(manifest_digest "$release")" = "$DIGEST" ]
+          echo "verified $release@$DIGEST"
