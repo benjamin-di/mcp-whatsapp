@@ -95,6 +95,7 @@ Restart the client. The daemon outlives client restarts.
 
 - **Sending:** `send_file` and `send_audio_message` take a `media_path` under the root.
 - **Receiving:** `download_media` caches to `<store>/<chat_jid>/<hex(message_id)>/<safe_filename>` (checked against the stored size and SHA-256). An optional `output_path` also places the file under the root; an existing file there makes the call a no-op.
+- **Expired media links:** media links from history sync carry a signed expiry and usually fail with HTTP 403 by the time you ask. `download_media` (and reads of the `whatsapp://media/…` resource) then asks the account's own phone to re-upload the file (WhatsApp's media retry receipt, the same request WhatsApp Web sends), waits up to 30 seconds for the answer, saves the new link and downloads once more. The phone must be online; media it has deleted cannot be recovered. This happens only for the message you asked for, never in bulk (automatic download and its backfill never ask the phone), and never for a message deleted for everyone unless `serve` runs with `-keep-revoked`.
 
 Paths outside the root, including symlinks that resolve outside it, are rejected. Anything inside the root is readable and writable by the tools, so keep secrets out.
 
@@ -121,10 +122,10 @@ Paths outside the root, including symlinks that resolve outside it, are rejected
 
 `serve -read-only` registers 14 of the 42 tools. Use it for archive and search deployments, or to limit what a prompt-injected agent can do through this server (see [Limitations](#limitations)).
 
-- **Kept:** the local-cache reads (`search_contacts`, `list_messages`, `list_chats`, `get_chat`, `get_message_context`, `get_poll_results`), `get_status`, `pairing_status`, live reads of your own account (`list_groups`, `get_group_info`, `get_blocklist`, `get_privacy_settings`), `download_media` (fetches an attachment you already received; the sender is not notified) and `request_sync` (asks your own phone for older history). The `whatsapp://media/...` resource stays as well.
+- **Kept:** the local-cache reads (`search_contacts`, `list_messages`, `list_chats`, `get_chat`, `get_message_context`, `get_poll_results`), `get_status`, `pairing_status`, live reads of your own account (`list_groups`, `get_group_info`, `get_blocklist`, `get_privacy_settings`), `download_media` (fetches an attachment you already received; the sender is not notified; if the link has expired it asks your own phone to re-upload the file, see [Expired media links](#sending-and-receiving-files)) and `request_sync` (asks your own phone for older history). The `whatsapp://media/...` resource stays as well.
 - **Not registered:** every tool that sends, reacts, replies, edits, deletes, marks read, shows typing or presence, or changes groups, privacy, blocklist or the profile; `is_on_whatsapp` (asks WhatsApp about arbitrary phone numbers); `get_group_invite_link` (`reset` revokes the link, and the link itself lets anyone join).
 - `get_status` reports `read_only: true`, and the server's MCP instructions say that send tools are disabled.
-- Nothing is sent on your behalf: the bridge never marks itself online and sends read receipts only from `mark_read`, `mark_chat_read` and the send tools. whatsmeow still acknowledges incoming messages with protocol delivery receipts, as every linked device does; while offline these are "inactive" receipts that WhatsApp apps do not show as ticks.
+- Nothing is sent on your behalf: the bridge never marks itself online and sends read receipts only from `mark_read`, `mark_chat_read` and the send tools. The only requests the kept tools send go to your own phone: `request_sync` (older history) and, from `download_media` or a media resource read whose link has expired, one media retry receipt asking it to re-upload that file; no contact sees either. Automatic download never sends one. whatsmeow still acknowledges incoming messages with protocol delivery receipts, as every linked device does; while offline these are "inactive" receipts that WhatsApp apps do not show as ticks.
 - `/pair` stays available, including its reset (logout) button, because re-pairing needs it. Protect it with `WHATSAPP_MCP_TOKEN` when `-allow-remote` is on.
 
 ### Edits and deletions
@@ -213,7 +214,7 @@ Data lives under `./store/` (`-store DIR`): `messages.db` (message cache), `what
 | `list_chats` | List chats with last-message preview; sort by activity or name |
 | `get_chat` | Chat metadata by JID |
 | `get_message_context` | Before/after window around a specific message |
-| `download_media` | Download persisted media to a local path |
+| `download_media` | Download persisted media to a local path; an expired link is recovered by asking your own phone to re-upload the file |
 | `request_sync` | Ask WhatsApp to backfill history for a chat |
 
 ### Send

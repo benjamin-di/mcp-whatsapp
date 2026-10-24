@@ -45,8 +45,10 @@ var readOnlyPolicies = map[string]readOnlyPolicy{
 	// Kept although their ReadOnlyHint is false (see readOnlyHintExceptions
 	// in tools_readonly_test.go). download_media fetches media of an
 	// already-received message from the CDN and writes it locally, without
-	// telling the sender. request_sync sends a history-sync request to the
-	// account's own primary phone only; no contact sees anything.
+	// telling the sender; for an expired link it sends one media retry
+	// receipt to the account's own phone. request_sync sends a history-sync
+	// request to the account's own primary phone only. No contact sees
+	// either.
 	"download_media": keepInReadOnly,
 	"request_sync":   keepInReadOnly,
 
