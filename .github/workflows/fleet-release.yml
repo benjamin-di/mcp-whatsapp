@@ -99,15 +99,17 @@ jobs:
           image="$REG/mcp-whatsapp@$digest"
           docker pull -q "$image" >/dev/null
 
-          # As a deployment runs it: uid 1000 (not the image's 10001), read-only root, tmpfs /tmp and store, and no
-          # network, so the unpaired daemon's pairing flow never reaches WhatsApp.
-          run=(--network none --read-only --user 1000:1000 --tmpfs /tmp
+          # As a deployment runs it: uid 1000 (not the image's 10001), read-only root, tmpfs /tmp and store.
+          run=(--read-only --user 1000:1000 --tmpfs /tmp
                --tmpfs /home/app/store:uid=1000,gid=1000,mode=0700 -e WHATSAPP_MCP_ADDR=0.0.0.0:8765)
 
-          # A remote bind refuses to start without its bearer.
-          rc=0; timeout 60 docker run --rm "${run[@]}" "$image" serve -allow-remote -read-only || rc=$?
+          # A remote bind refuses to start without its bearer (before any network use).
+          rc=0; timeout 60 docker run --rm --network none "${run[@]}" "$image" serve -allow-remote -read-only || rc=$?
           [ "$rc" = 2 ] || { echo "ERROR: expected a refusal without WHATSAPP_MCP_TOKEN, got exit $rc" >&2; exit 1; }
 
+          # Serving needs the network: an unpaired daemon starts pairing at boot and exits when WhatsApp is
+          # unreachable. Nothing is linked (no code is requested), and reaching web.whatsapp.com also proves the
+          # image's CA certificates.
           name="smoke-${VCS_REF:0:12}"
           docker run -d --name "$name" "${run[@]}" -e WHATSAPP_MCP_TOKEN=smoke-token "$image" \
             serve -allow-remote -read-only >/dev/null
