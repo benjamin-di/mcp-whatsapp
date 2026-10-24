@@ -18,6 +18,7 @@ import (
 	"github.com/sealjay/mcp-whatsapp/internal/client"
 	"github.com/sealjay/mcp-whatsapp/internal/daemon"
 	mcpsrv "github.com/sealjay/mcp-whatsapp/internal/mcp"
+	"github.com/sealjay/mcp-whatsapp/internal/medialink"
 	"github.com/sealjay/mcp-whatsapp/internal/security"
 	"github.com/sealjay/mcp-whatsapp/internal/store"
 )
@@ -29,6 +30,7 @@ func runServe(storeDir string, redactor *security.Redactor, args []string) int {
 		readOnly    bool
 		keepRevoked bool
 		ad          autoDownloadFlags
+		publicURL   string
 	)
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
@@ -41,6 +43,7 @@ func runServe(storeDir string, redactor *security.Redactor, args []string) int {
 	fs.StringVar(&ad.types, "auto-download", "", "download incoming media of these types automatically: comma list of image,video,audio,document, or all (default: off, env WHATSAPP_MCP_AUTO_DOWNLOAD)")
 	fs.IntVar(&ad.maxMB, "auto-download-max-mb", client.DefaultAutoDownloadMaxMB, "skip auto-download of media larger than this many MiB; 0 = no limit (env WHATSAPP_MCP_AUTO_DOWNLOAD_MAX_MB)")
 	fs.IntVar(&ad.backfillDays, "auto-download-backfill-days", 0, "only backfill stored media from the last N days; 0 = no limit (env WHATSAPP_MCP_AUTO_DOWNLOAD_BACKFILL_DAYS)")
+	fs.StringVar(&publicURL, "public-url", "", "address clients reach this daemon at, e.g. https://example.com/whatsapp; enables download_media's one-time download links (env WHATSAPP_MCP_PUBLIC_URL)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -72,6 +75,17 @@ func runServe(storeDir string, redactor *security.Redactor, args []string) int {
 	}
 
 	addr = resolveAddr(addr)
+	if publicURL == "" {
+		publicURL = os.Getenv("WHATSAPP_MCP_PUBLIC_URL")
+	}
+	var links *medialink.Registry
+	if publicURL != "" {
+		var err error
+		if links, err = medialink.New(publicURL); err != nil {
+			fmt.Fprintf(os.Stderr, "-public-url: %v\n", err)
+			return 2
+		}
+	}
 	if !allowRemote && !isLoopbackAddr(addr) {
 		fmt.Fprintf(os.Stderr, "refusing to bind to non-loopback address %q; pass -allow-remote if you mean it\n", addr)
 		return 2
@@ -170,6 +184,10 @@ func runServe(storeDir string, redactor *security.Redactor, args []string) int {
 	}
 
 	mcpServer := mcpsrv.NewServer(c, d.Cache(), mcpsrv.WithReadOnly(readOnly))
+	if links != nil {
+		mcpServer.SetMediaLinks(links)
+		fmt.Fprintf(os.Stderr, "download links: on, served at %s (each link is its own credential and works once)\n", medialink.PathPrefix)
+	}
 	d.SetMCPMount(mcpServer.AttachHTTP)
 	if readOnly {
 		fmt.Fprintf(os.Stderr, "read-only mode: %d MCP tools registered; send and action tools are disabled\n", len(mcpServer.MCP().ListTools()))

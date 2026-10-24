@@ -230,3 +230,45 @@ func TestServer_LogoutErrorFromReset(t *testing.T) {
 		t.Fatal("expected logout error to surface")
 	}
 }
+
+// TestServer_MediaLinksNeedNoBearer: with a token configured, paths outside
+// /mcp and /pair (the one-time download links at /media/<token>) are not
+// bearer-gated; the link token is their credential.
+func TestServer_MediaLinksNeedNoBearer(t *testing.T) {
+	drv := newFakePairDriver(true)
+	s, err := New(Config{
+		Addr:      "127.0.0.1:0",
+		Driver:    drv,
+		AuthToken: "secret123",
+		MCPMount: func(mux *http.ServeMux) {
+			mux.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) {})
+			mux.HandleFunc("/media/", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("file")) })
+		},
+	})
+	if err != nil {
+		t.Fatalf("daemon.New: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = s.Run(ctx) }()
+	<-s.listenerOK
+	base := "http://" + s.BoundAddr()
+
+	resp, err := http.Get(base + "/media/sometoken")
+	if err != nil {
+		t.Fatalf("GET /media: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || string(body) != "file" {
+		t.Fatalf("GET /media without bearer = %d %q, want 200 \"file\"", resp.StatusCode, body)
+	}
+	resp, err = http.Get(base + "/mcp")
+	if err != nil {
+		t.Fatalf("GET /mcp: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("GET /mcp without bearer = %d, want 401", resp.StatusCode)
+	}
+}

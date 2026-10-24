@@ -106,6 +106,8 @@ Paths outside the root, including symlinks that resolve outside it, are rejected
 
 > When calling the WhatsApp MCP's `download_media`, always pass `output_path` set to a path under your shared workspace. Without it the decrypted file lands only in the daemon's local cache, which is outside your sandbox and unreadable. `output_path` must live under `WHATSAPP_MCP_MEDIA_ROOT` on the daemon side; the basename is yours to pick.
 
+**Remote clients** (on another machine, or hosted ones such as claude.ai) see images and voice notes up to 5 MiB inline, but cannot reach videos or documents in the cache at all, and cannot hand any file to another tool. Start `serve` with `-public-url` set to the address clients reach the daemon at, and `download_media` with `link: true` adds `Link` to its result: a one-time address of the decrypted file that needs no credentials, valid for 10 minutes and good for one download (`GET <public-url>/media/<token>`; a `HEAD` does not use it up). A client, or another server that imports files from a URL, fetches the file from there. The token in the link is its only credential, so treat the link like the file itself; links are kept in memory, so restarting the daemon revokes them. If a reverse proxy sits in front of the daemon, it must forward `/media/` as well as `/mcp`.
+
 ### Serve flags and environment
 
 - `-addr host:port` (env `WHATSAPP_MCP_ADDR`, default `127.0.0.1:8765`).
@@ -115,6 +117,7 @@ Paths outside the root, including symlinks that resolve outside it, are rejected
 - `-auto-download-max-mb N` (env `WHATSAPP_MCP_AUTO_DOWNLOAD_MAX_MB`, default `25`): size cap in MiB for automatic downloads; `0` means no limit.
 - `-auto-download-backfill-days N` (env `WHATSAPP_MCP_AUTO_DOWNLOAD_BACKFILL_DAYS`, default `0`): only backfill media from the last N days; `0` means no limit.
 - `-keep-revoked` (env `WHATSAPP_MCP_KEEP_REVOKED=1`): keep the text and media of cached messages that are deleted for everyone. By default the cache records the deletion and clears them (see [Edits and deletions](#edits-and-deletions)).
+- `-public-url URL` (env `WHATSAPP_MCP_PUBLIC_URL`): the address clients reach the daemon at, e.g. `https://example.com/whatsapp`; enables `download_media`'s one-time download links (above). Off by default.
 - `WHATSAPP_MCP_DEBUG=1` or `-debug`: verbose logs (see [Debug logging](#debug-logging)).
 - `-full-history`, `-history-days N`, `-history-size-mb N` (env `WHATSAPP_MCP_FULL_HISTORY`, `WHATSAPP_MCP_HISTORY_DAYS`, `WHATSAPP_MCP_HISTORY_SIZE_MB`): how much history to ask for when pairing through `/pair` (see [Full history at pairing](#full-history-at-pairing)).
 - `-read-only` (env `WHATSAPP_MCP_READ_ONLY=1` or `true`): register only tools that cannot change anything on WhatsApp (see [Read-only mode](#read-only-mode)). The flag wins over the env var; an unparseable value stops `serve`.
@@ -215,7 +218,7 @@ Data lives under `./store/` (`-store DIR`): `messages.db` (message cache), `what
 | `list_chats` | List chats with last-message preview; sort by activity or name |
 | `get_chat` | Chat metadata by JID |
 | `get_message_context` | Before/after window around a specific message |
-| `download_media` | Download persisted media to a local path; an expired link is recovered by asking your own phone to re-upload the file |
+| `download_media` | Download persisted media to a local path, optionally with a one-time download link; an expired link is recovered by asking your own phone to re-upload the file |
 | `request_sync` | Ask WhatsApp to backfill history for a chat |
 
 ### Send

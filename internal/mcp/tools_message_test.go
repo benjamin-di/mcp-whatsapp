@@ -2,9 +2,14 @@ package mcp
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
+
+	"github.com/sealjay/mcp-whatsapp/internal/medialink"
 )
 
 // TestFlexInt_UnmarshalJSON covers request_sync's count argument, which must
@@ -109,5 +114,45 @@ func TestRequestSync_ArgValidation(t *testing.T) {
 				t.Fatalf("args %v: want a rejected (IsError) result, got %+v", tc.args, res)
 			}
 		})
+	}
+}
+
+// TestDownloadMedia_LinkNeedsPublicURL: asking for a link while links are off
+// fails before any download is attempted (the nil client would panic).
+func TestDownloadMedia_LinkNeedsPublicURL(t *testing.T) {
+	s := NewServer(nil, nil)
+	tool, ok := s.MCP().ListTools()["download_media"]
+	if !ok || tool == nil || tool.Handler == nil {
+		t.Fatal("download_media not registered")
+	}
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"message_id": "ABC", "chat_jid": "447967960994@s.whatsapp.net", "link": true}
+	res, err := tool.Handler(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler returned error: %v", err)
+	}
+	if !res.IsError || !strings.Contains(res.Content[0].(mcp.TextContent).Text, "-public-url") {
+		t.Fatalf("want a rejected result naming -public-url, got %+v", res)
+	}
+}
+
+// TestAttachHTTP_MountsLinksOnlyWhenEnabled: /media/ is served only after
+// SetMediaLinks.
+func TestAttachHTTP_MountsLinksOnlyWhenEnabled(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		s := NewServer(nil, nil)
+		if enabled {
+			reg, err := medialink.New("https://example.com/whatsapp")
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.SetMediaLinks(reg)
+		}
+		mux := http.NewServeMux()
+		s.AttachHTTP(mux)
+		_, pattern := mux.Handler(httptest.NewRequest(http.MethodGet, "/media/x", nil))
+		if got := pattern == medialink.PathPrefix; got != enabled {
+			t.Errorf("enabled=%v: /media/ pattern %q", enabled, pattern)
+		}
 	}
 }
