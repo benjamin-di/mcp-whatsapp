@@ -336,6 +336,14 @@ CREATE TABLE IF NOT EXISTS poll_votes (
 	timestamp TIMESTAMP NOT NULL,
 	PRIMARY KEY (poll_message_id, poll_chat_jid, voter_jid)
 );
+
+CREATE TABLE IF NOT EXISTS media_auto_download_failures (
+	message_id TEXT NOT NULL,
+	chat_jid TEXT NOT NULL,
+	reason TEXT NOT NULL,
+	failed_at TIMESTAMP NOT NULL,
+	PRIMARY KEY (message_id, chat_jid)
+);
 `
 
 // migrateSchema brings legacy databases up to the current layout. SQLite lacks

@@ -42,6 +42,13 @@ Serve-specific flags (after 'serve'):
   -addr host:port   HTTP bind address (default: 127.0.0.1:8765, env WHATSAPP_MCP_ADDR)
   -allow-remote     Allow binding to a non-loopback address (dangerous)
   -read-only        Register only tools that cannot change anything on WhatsApp (env WHATSAPP_MCP_READ_ONLY)
+  -auto-download TYPES
+                    Download incoming media automatically: comma list of
+                    image,video,audio,document, or all (default: off,
+                    env WHATSAPP_MCP_AUTO_DOWNLOAD)
+  -auto-download-max-mb N
+                    Skip auto-download of media over N MiB; 0 = no limit
+                    (default: 25, env WHATSAPP_MCP_AUTO_DOWNLOAD_MAX_MB)
 
 Pairing history flags (after 'login' or 'serve'; only affect a new pairing):
   -full-history         Ask the phone for a full history sync (env WHATSAPP_MCP_FULL_HISTORY)
