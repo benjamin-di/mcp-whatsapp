@@ -4,6 +4,7 @@
 //	login  — one-shot interactive QR pairing (writes session to store/whatsapp.db)
 //	serve  — long-running HTTP daemon: serves MCP at /mcp and pairing UI at /pair
 //	smoke  — non-interactive boot-check used by CI (no network, no listener)
+//	healthcheck — probe a running daemon's /healthz (or /readyz) for container HEALTHCHECKs
 package main
 
 import (
@@ -29,6 +30,7 @@ Commands:
   login   Pair this device with your WhatsApp account via QR code (terminal)
   serve   Run the always-on HTTP MCP daemon (tracks events + serves MCP on 127.0.0.1:8765)
   smoke   Non-interactive boot check (CI): opens store + builds MCP server without connecting
+  healthcheck  Probe a running daemon's /healthz (-ready: /readyz); exit 0 on HTTP 200
   help    Show this help
 
 Global flags (before the command):
@@ -97,6 +99,8 @@ func main() {
 		code = runServe(storeDir, redactor, rest)
 	case "smoke":
 		code = runSmoke(storeDir, redactor, rest)
+	case "healthcheck":
+		code = runHealthcheck(rest)
 	case "help", "-h", "--help":
 		fmt.Fprint(os.Stdout, usage)
 		code = 0

@@ -3,9 +3,15 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
+
+	"go.mau.fi/whatsmeow/types"
+
+	"github.com/sealjay/mcp-whatsapp/internal/client"
 )
 
 // fakePairCache is a minimal pairingCache for exercising pairing_status
@@ -85,5 +91,113 @@ func TestPairingStatus_AwaitingQRGenerating(t *testing.T) {
 	}
 	if env["detail"] != "Generating pairing code…" {
 		t.Errorf("detail = %v, want generating message", env["detail"])
+	}
+}
+
+// -- get_status ---------------------------------------------------------------
+
+var statusNow = time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+
+// roundTrip decodes the payload the way an MCP client sees it.
+func roundTrip(t *testing.T, v map[string]any) map[string]any {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	return out
+}
+
+func TestStatusPayload_Connected(t *testing.T) {
+	own := &types.JID{User: "447700000001", Server: types.DefaultUserServer}
+	got := roundTrip(t, statusPayload(true, own, client.ConnectionStatus{
+		State:         client.StateConnected,
+		Ready:         true,
+		Since:         statusNow.Add(-time.Hour),
+		LastEventAt:   statusNow.Add(-5 * time.Second),
+		LastMessageAt: statusNow.Add(-time.Minute),
+	}, statusNow))
+
+	want := map[string]any{
+		"connected":              true,
+		"paired":                 true,
+		"state":                  "connected",
+		"ready":                  true,
+		"keepalive_failing":      false,
+		"since":                  "2026-01-01T11:00:00Z",
+		"last_event_at":          "2026-01-01T11:59:55Z",
+		"last_event_age_seconds": float64(5),
+		"last_message_at":        "2026-01-01T11:59:00Z",
+		"own_jid":                "447700000001@s.whatsapp.net",
+		"own_phone":              "447700000001",
+	}
+	if len(got) != len(want) {
+		t.Errorf("fields = %v, want %v", got, want)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("%s = %v, want %v", k, got[k], v)
+		}
+	}
+}
+
+func TestStatusPayload_Unpaired(t *testing.T) {
+	got := roundTrip(t, statusPayload(false, nil, client.ConnectionStatus{State: client.StateUnpaired, Since: statusNow}, statusNow))
+	if got["paired"] != false || got["state"] != "unpaired" || got["ready"] != false {
+		t.Fatalf("got %v", got)
+	}
+	if hint, _ := got["hint"].(string); !strings.Contains(hint, "/pair") {
+		t.Errorf("hint = %q, want the pairing URL", hint)
+	}
+	for _, k := range []string{"own_jid", "own_phone", "last_event_at", "last_event_age_seconds", "last_message_at", "reason", "ban_code"} {
+		if _, ok := got[k]; ok {
+			t.Errorf("%s should be absent: %v", k, got)
+		}
+	}
+}
+
+func TestStatusPayload_LoggedOut(t *testing.T) {
+	got := roundTrip(t, statusPayload(false, nil, client.ConnectionStatus{
+		State:  client.StateLoggedOut,
+		Since:  statusNow,
+		Reason: "401: logged out from another device",
+	}, statusNow))
+	if got["state"] != "logged_out" || got["reason"] != "401: logged out from another device" || got["paired"] != false {
+		t.Fatalf("got %v", got)
+	}
+	if hint, _ := got["hint"].(string); !strings.Contains(hint, "Re-pair") {
+		t.Errorf("hint = %q, want the re-pair hint", hint)
+	}
+}
+
+func TestStatusPayload_TemporaryBan(t *testing.T) {
+	own := &types.JID{User: "447700000001", Server: types.DefaultUserServer}
+	got := roundTrip(t, statusPayload(false, own, client.ConnectionStatus{
+		State:        client.StateTemporaryBan,
+		Since:        statusNow,
+		Reason:       "101: you sent too many messages to people who don't have you in their address books",
+		BanCode:      101,
+		BanExpiresAt: statusNow.Add(time.Hour),
+	}, statusNow))
+	if got["state"] != "temporary_ban" || got["ban_code"] != float64(101) || got["ban_expires_at"] != "2026-01-01T13:00:00Z" {
+		t.Fatalf("got %v", got)
+	}
+	if _, ok := got["hint"]; !ok {
+		t.Errorf("hint missing: %v", got)
+	}
+}
+
+func TestStatusPayload_KeepAliveFailing(t *testing.T) {
+	own := &types.JID{User: "447700000001", Server: types.DefaultUserServer}
+	got := roundTrip(t, statusPayload(true, own, client.ConnectionStatus{
+		State:            client.StateConnected,
+		KeepAliveFailing: true,
+	}, statusNow))
+	if got["state"] != "connected" || got["ready"] != false || got["keepalive_failing"] != true {
+		t.Fatalf("got %v", got)
 	}
 }

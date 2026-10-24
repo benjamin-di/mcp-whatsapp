@@ -177,6 +177,9 @@ func TestGetStatus_ReportsReadOnly(t *testing.T) {
 		if status["connected"] != false || status["paired"] != false {
 			t.Errorf("nil client: connected=%v paired=%v, want false/false", status["connected"], status["paired"])
 		}
+		if status["state"] != "unpaired" || status["ready"] != false {
+			t.Errorf("nil client: state=%v ready=%v, want unpaired/false", status["state"], status["ready"])
+		}
 	}
 }
 

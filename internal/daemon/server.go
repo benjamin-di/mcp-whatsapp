@@ -36,7 +36,8 @@ type pairDriver interface {
 //
 // AuthToken, if non-empty, gates /mcp and /pair/* behind the HTTP header
 // `Authorization: Bearer <token>`. Loopback-bound operation passes an
-// empty token and leaves these routes unauthenticated.
+// empty token and leaves these routes unauthenticated. The /healthz and
+// /readyz probes are never gated.
 type Config struct {
 	Addr      string
 	Driver    pairDriver
@@ -100,6 +101,7 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 	handlers := newPairHandlers(s.cache, s.cfg.Driver, coder)
 	handlers.mount(mux)
+	mountHealth(mux, s.cfg.Driver)
 	if s.cfg.MCPMount != nil {
 		s.cfg.MCPMount(mux)
 	} else {

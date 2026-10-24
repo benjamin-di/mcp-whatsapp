@@ -61,3 +61,9 @@ func (p *productionDriver) PairPhone(ctx context.Context, phone string) (string,
 }
 
 func (p *productionDriver) Disconnect() { p.c.Disconnect() }
+
+// ConnectionStatus lets the daemon's /readyz endpoint report the tracked
+// WhatsApp connection state.
+func (p *productionDriver) ConnectionStatus() client.ConnectionStatus {
+	return p.c.ConnectionStatus()
+}

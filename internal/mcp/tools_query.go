@@ -3,9 +3,13 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 
+	"go.mau.fi/whatsmeow/types"
+
+	"github.com/sealjay/mcp-whatsapp/internal/client"
 	"github.com/sealjay/mcp-whatsapp/internal/store"
 )
 
@@ -260,31 +264,79 @@ func (s *Server) registerIsOnWhatsApp() {
 
 func (s *Server) registerGetStatus() {
 	tool := mcp.NewTool("get_status",
-		mcp.WithDescription("Report whether the embedded WhatsApp bridge is connected and which account it is paired with. Read-only; no side effects. Call this first when other tools fail with auth or connection errors. Returns a JSON object `{connected, paired, read_only, own_jid?, own_phone?, hint?}` — `read_only` is true when the operator started the server in read-only mode (send and action tools are not registered); `hint` includes the URL of the local pairing UI when not yet paired."),
+		mcp.WithDescription("Report whether the embedded WhatsApp bridge is connected and which account it is paired with. Read-only; no side effects. Call this first when other tools fail with auth or connection errors. Returns a JSON object `{connected, paired, read_only, state, ready, since, reason?, keepalive_failing, last_event_at?, last_event_age_seconds?, last_message_at?, ban_code?, ban_expires_at?, own_jid?, own_phone?, hint?}`. `read_only` is true when the operator started the server in read-only mode (send and action tools are not registered). `state` is one of unpaired, connecting, connected, disconnected (whatsmeow reconnects on its own), logged_out, stream_replaced, client_outdated, temporary_ban; `ready` is true only when paired, connected and keepalives succeed. Timestamps are RFC 3339 UTC. `hint` says how to recover, including the URL of the local pairing UI when not yet paired."),
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(false),
 	)
 	s.addTool(tool, func(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		status := map[string]any{"read_only": s.readOnly}
 		// A nil client (tests, smoke) reports disconnected and unpaired.
-		connected, paired := false, false
+		connected := false
+		var own *types.JID
+		cs := client.ConnectionStatus{State: client.StateUnpaired}
 		if s.client != nil {
 			connected = s.client.IsConnected()
-			if wa := s.client.WA(); wa != nil && wa.Store != nil && wa.Store.ID != nil {
-				status["own_jid"] = wa.Store.ID.String()
-				status["own_phone"] = wa.Store.ID.User
-				paired = true
+			if wa := s.client.WA(); wa != nil && wa.Store != nil {
+				own = wa.Store.ID
 			}
+			cs = s.client.ConnectionStatus()
 		}
-		status["connected"] = connected
-		status["paired"] = paired
-		if !paired {
-			status["hint"] = "Not paired. Open /pair on this server in a browser to scan QR (default: http://127.0.0.1:8765/pair)."
-		}
+		status := statusPayload(connected, own, cs, time.Now())
+		status["read_only"] = s.readOnly
 		return resultJSON(status)
 	})
+}
+
+// statusHints tells the caller how to recover from states that need action.
+var statusHints = map[client.ConnState]string{
+	client.StateLoggedOut:      "WhatsApp revoked this session. Re-pair via /pair on this server (default: http://127.0.0.1:8765/pair).",
+	client.StateStreamReplaced: "Another client connected with this session (often a second process using the same store). Stop it, then restart this daemon.",
+	client.StateClientOutdated: "WhatsApp rejected this client version. Upgrade whatsapp-mcp (whatsmeow) and restart.",
+	client.StateTemporaryBan:   "WhatsApp temporarily banned this account; it cannot connect until the ban expires (ban_expires_at, when WhatsApp gave one).",
+}
+
+// statusPayload builds the get_status JSON object. own is the paired
+// device JID (nil when unpaired).
+func statusPayload(connected bool, own *types.JID, cs client.ConnectionStatus, now time.Time) map[string]any {
+	status := map[string]any{
+		"connected":         connected,
+		"state":             string(cs.State),
+		"ready":             cs.Ready,
+		"keepalive_failing": cs.KeepAliveFailing,
+	}
+	setTime := func(key string, t time.Time) {
+		if !t.IsZero() {
+			status[key] = t.UTC().Format(time.RFC3339)
+		}
+	}
+	setTime("since", cs.Since)
+	setTime("last_event_at", cs.LastEventAt)
+	setTime("last_message_at", cs.LastMessageAt)
+	if !cs.LastEventAt.IsZero() {
+		status["last_event_age_seconds"] = int64(now.Sub(cs.LastEventAt) / time.Second)
+	}
+	if cs.Reason != "" {
+		status["reason"] = cs.Reason
+	}
+	if cs.State == client.StateTemporaryBan {
+		status["ban_code"] = cs.BanCode
+		setTime("ban_expires_at", cs.BanExpiresAt)
+	}
+	if hint, ok := statusHints[cs.State]; ok {
+		status["hint"] = hint
+	}
+	if own != nil {
+		status["own_jid"] = own.String()
+		status["own_phone"] = own.User
+		status["paired"] = true
+	} else {
+		status["paired"] = false
+		if _, ok := status["hint"]; !ok {
+			status["hint"] = "Not paired. Open /pair on this server in a browser to scan QR (default: http://127.0.0.1:8765/pair)."
+		}
+	}
+	return status
 }
 
 // -- pairing_status ---------------------------------------------------------

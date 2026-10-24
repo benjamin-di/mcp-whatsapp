@@ -52,6 +52,7 @@ type Client struct {
 	allowedMediaRoot string
 	redactor         *security.Redactor
 	limiter          *ratelimit.Limiter
+	conn             connTracker
 }
 
 // New constructs a Client. It sets the latest WhatsApp version best-effort,
@@ -140,7 +141,7 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 		return nil, errors.New("failed to create whatsmeow client")
 	}
 
-	return &Client{
+	c := &Client{
 		wa:               wa,
 		downloadMedia:    wa.Download,
 		store:            cfg.Store,
@@ -148,7 +149,12 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 		allowedMediaRoot: cfg.AllowedMediaRoot,
 		redactor:         redactor,
 		limiter:          limiter,
-	}, nil
+	}
+	// Track connection state from the start so pairing events, which
+	// arrive before StartEventHandler, are seen too.
+	c.conn.since = time.Now()
+	wa.AddEventHandler(c.conn.handleEvent)
+	return c, nil
 }
 
 // ValidateMediaPath is a bound convenience wrapper around
