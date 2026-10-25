@@ -59,6 +59,7 @@ func (s *Server) registerSendMessage() {
 type sendFileArgs struct {
 	Recipient    string `json:"recipient"`
 	MediaPath    string `json:"media_path"`
+	SourceURL    string `json:"source_url,omitempty"`
 	Caption      string `json:"caption,omitempty"`
 	MarkChatRead bool   `json:"mark_chat_read,omitempty"`
 	ViewOnce     bool   `json:"view_once,omitempty"`
@@ -68,7 +69,8 @@ func (s *Server) registerSendFile() {
 	tool := mcp.NewTool("send_file",
 		mcp.WithDescription("Upload and send a picture, video, document, or raw audio attachment via WhatsApp; the recipient sees a media message and the outgoing row is persisted to the local cache. Reversible via delete_message (revoke). For voice notes use send_audio_message (which transcodes to ogg/opus); for plain text use send_message. Returns a JSON object `{Success, Message, ID}` where `ID` is the WhatsApp message ID on success."),
 		mcp.WithString("recipient", mcp.Required(), mcp.Description(recipientDesc)),
-		mcp.WithString("media_path", mcp.Required(), mcp.Description("absolute path to the media file; must sit under the configured media root (`WHATSAPP_MCP_MEDIA_ROOT`, default `<store>/uploads/`)")),
+		mcp.WithString("media_path", mcp.Description("absolute path under the configured media root (`WHATSAPP_MCP_MEDIA_ROOT`, default `<store>/uploads/`); provide exactly one of media_path or source_url")),
+		mcp.WithString("source_url", mcp.Description("public HTTPS download link to the file itself (e.g. a one-time photo download); fetched by this server, up to 64 MiB, then removed after the send attempt. Provide exactly one of source_url or media_path. A failed attempt may consume a one-time link: obtain a fresh link before retrying; never repeat a send with uncertain delivery.")),
 		mcp.WithString("caption", mcp.Description("optional caption for image/video/document submessages; ignored for raw audio")),
 		mcp.WithBoolean("mark_chat_read", mcp.DefaultBool(false), mcp.Description("if true, also ack recent incoming messages in the chat to clear the unread badge (defaults to false)")),
 		mcp.WithBoolean("view_once", mcp.DefaultBool(false), mcp.Description("if true, mark image/video/audio submessages as view-once; silently ignored for documents (defaults to false)")),
@@ -78,18 +80,23 @@ func (s *Server) registerSendFile() {
 		mcp.WithOpenWorldHintAnnotation(true),
 	)
 	s.mcp.AddTool(tool, mcp.NewTypedToolHandler(func(ctx context.Context, req mcp.CallToolRequest, a sendFileArgs) (*mcp.CallToolResult, error) {
-		if a.Recipient == "" || a.MediaPath == "" {
-			return mcp.NewToolResultError("recipient and media_path are required"), nil
+		if a.Recipient == "" || (a.MediaPath == "") == (a.SourceURL == "") {
+			return mcp.NewToolResultError("recipient and exactly one of media_path or source_url are required"), nil
 		}
-		safePath, err := s.client.ValidateMediaPath(a.MediaPath)
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
+		safePath := ""
+		if a.MediaPath != "" {
+			var err error
+			safePath, err = s.client.ValidateMediaPath(a.MediaPath)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
 		}
 		ctx = withRateLimitOverride(ctx, req)
 		r := s.client.SendMediaWithOptions(ctx, client.SendMediaOptions{
 			Recipient: a.Recipient,
 			Caption:   a.Caption,
 			MediaPath: safePath,
+			SourceURL: a.SourceURL,
 			ViewOnce:  a.ViewOnce,
 		})
 		s.maybeMarkChatRead(ctx, r, a.Recipient, a.MarkChatRead)

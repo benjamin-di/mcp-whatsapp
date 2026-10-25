@@ -33,21 +33,25 @@ type SendMediaOptions struct {
 	Recipient string
 	Caption   string
 	MediaPath string
+	SourceURL string
 	ViewOnce  bool
 }
 
 // Send sends a text message.
 func (c *Client) Send(ctx context.Context, recipient, message string) SendResult {
-	return c.send(ctx, recipient, message, "", false)
+	return c.send(ctx, recipient, message, "", "", false)
 }
 
 // SendMediaWithOptions is the extensible entry point for media sends.
 func (c *Client) SendMediaWithOptions(ctx context.Context, opts SendMediaOptions) SendResult {
-	return c.send(ctx, opts.Recipient, opts.Caption, opts.MediaPath, opts.ViewOnce)
+	if opts.MediaPath != "" && opts.SourceURL != "" {
+		return SendResult{Success: false, Message: "provide exactly one of media_path or source_url"}
+	}
+	return c.send(ctx, opts.Recipient, opts.Caption, opts.MediaPath, opts.SourceURL, opts.ViewOnce)
 }
 
 // send is the unified implementation shared by Send and SendMediaWithOptions.
-func (c *Client) send(ctx context.Context, recipient, message, mediaPath string, viewOnce bool) SendResult {
+func (c *Client) send(ctx context.Context, recipient, message, mediaPath, sourceURL string, viewOnce bool) SendResult {
 	if !c.wa.IsConnected() {
 		return SendResult{Success: false, Message: "Not connected to WhatsApp"}
 	}
@@ -57,9 +61,11 @@ func (c *Client) send(ctx context.Context, recipient, message, mediaPath string,
 		return SendResult{Success: false, Message: err.Error()}
 	}
 
-	if err := c.checkSendRate(ctx, recipientJID); err != nil {
+	mediaPath, cleanup, err := c.prepareSendMedia(ctx, recipientJID, mediaPath, sourceURL)
+	if err != nil {
 		return SendResult{Success: false, Message: err.Error()}
 	}
+	defer cleanup()
 
 	// Detect disappearing timer for group chats; direct chats default to 0.
 	msg := &waProto.Message{
