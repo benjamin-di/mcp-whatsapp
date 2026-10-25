@@ -3,8 +3,9 @@ package client
 import (
 	"context"
 	"fmt"
-	"go.mau.fi/whatsmeow/types"
 	"os"
+
+	"go.mau.fi/whatsmeow/types"
 
 	"github.com/sealjay/mcp-whatsapp/internal/media"
 )

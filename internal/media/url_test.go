@@ -120,6 +120,50 @@ func TestURLImageStagingAndCleanup(t *testing.T) {
 	}
 }
 
+func TestURLRedirectDoesNotDiscloseSourceLink(t *testing.T) {
+	calls := 0
+	client := mediaHTTPClient(responseTransport(func(req *http.Request) (*http.Response, error) {
+		calls++
+		if calls == 1 {
+			return &http.Response{StatusCode: 302, Header: http.Header{"Location": []string{"https://files.example.com/photo"}}, Body: io.NopCloser(strings.NewReader(""))}, nil
+		}
+		for _, header := range []string{"Referer", "Authorization", "Cookie"} {
+			if req.Header.Get(header) != "" {
+				t.Fatalf("redirect disclosed %s", header)
+			}
+		}
+		body := append([]byte{0xff, 0xd8, 0xff}, bytes.Repeat([]byte{1}, 800)...)
+		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(bytes.NewReader(body)), ContentLength: int64(len(body))}, nil
+	}))
+	_, cleanup, err := downloadURL(context.Background(), "https://example.com/private-token?signature=synthetic-secret", t.TempDir(), client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	if calls != 2 {
+		t.Fatalf("redirect was not followed: %d requests", calls)
+	}
+}
+
+type unlimitedBody struct{}
+
+func (unlimitedBody) Read(p []byte) (int, error) { clear(p); return len(p), nil }
+
+func TestURLStreamingLimitCleansPartialFilesWithoutContentLength(t *testing.T) {
+	root := t.TempDir()
+	client := mediaHTTPClient(responseTransport(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(unlimitedBody{}), ContentLength: -1}, nil
+	}))
+	_, _, err := downloadURL(context.Background(), "https://example.com/stream", root, client)
+	if err == nil || !strings.Contains(err.Error(), "download limit") {
+		t.Fatalf("stream was not bounded: %v", err)
+	}
+	files, _ := os.ReadDir(root)
+	if len(files) != 0 {
+		t.Fatal("over-limit stream retained temporary files")
+	}
+}
+
 func TestURLDownloadErrorsDoNotLeakTokensOrRetainFiles(t *testing.T) {
 	for _, tc := range []struct {
 		name     string

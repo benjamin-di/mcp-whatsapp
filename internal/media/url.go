@@ -37,6 +37,11 @@ func mediaHTTPClient(transport http.RoundTripper) *http.Client {
 		Transport: transport,
 		Timeout:   60 * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			// net/http otherwise adds the previous URL as Referer. File links
+			// can carry credentials in their path or query, so never forward it.
+			req.Header.Del("Referer")
+			req.Header.Del("Authorization")
+			req.Header.Del("Cookie")
 			if len(via) > 3 {
 				return errors.New("too many media redirects")
 			}
