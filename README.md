@@ -1,5 +1,14 @@
 # WhatsApp MCP Server
 
+`send_file` accepts exactly one of `media_path` (a file under the configured media root)
+or `source_url` (a public HTTPS link to the file itself). URL imports are capped at
+64 MiB and 60 seconds, reject private network destinations and unsafe redirects,
+and use no proxy, cookies or credentials. The temporary file is removed after the
+send attempt. Image bytes are detected even when the URL has no file extension.
+For one-time links, pass the link straight to `source_url` without previewing it;
+if an attempt consumes it before a failed send, obtain a fresh link. Never repeat
+a send whose delivery is uncertain. Existing send approvals and rate limits apply.
+
 [![License: MIT](https://img.shields.io/github/license/Sealjay/mcp-whatsapp)](LICENSE)
 [![CI](https://github.com/Sealjay/mcp-whatsapp/actions/workflows/ci.yml/badge.svg)](https://github.com/Sealjay/mcp-whatsapp/actions/workflows/ci.yml)
 [![Go Report Card](https://goreportcard.com/badge/github.com/Sealjay/mcp-whatsapp)](https://goreportcard.com/report/github.com/Sealjay/mcp-whatsapp)
