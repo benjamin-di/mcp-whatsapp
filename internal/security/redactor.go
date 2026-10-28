@@ -130,6 +130,14 @@ func (r *Redactor) Err(err error) string {
 	return maskPhones(msg)
 }
 
+// Line masks phone digit runs in a log line we did not format ourselves,
+// such as whatsmeow's own log output, which names full JIDs (for example
+// "Error unmarshaling plaintext message from <JID>"). Phone-number JIDs, LIDs
+// and group IDs become "****<last5>" in both modes, as in Err.
+func (r *Redactor) Line(line string) string {
+	return maskPhones(line)
+}
+
 // maskPhones replaces phone digit runs with "****" + last 5 characters.
 func maskPhones(s string) string {
 	return phoneDigitRun.ReplaceAllStringFunc(s, func(match string) string {
