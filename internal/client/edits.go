@@ -66,8 +66,8 @@ func (c *Client) messageChangeOf(ctx context.Context, m *waProto.Message, evt *e
 	}
 	decrypted, err := c.wa.DecryptSecretEncryptedMessage(ctx, &events.Message{Info: evt.Info, Message: m})
 	if err != nil {
-		c.log.Warnf("Failed to decrypt edit of %s in %s: %v",
-			c.redactor.MsgID(enc.GetTargetMessageKey().GetID()), c.redactor.JID(evt.Info.Chat.String()), err)
+		c.log.Warnf("Failed to decrypt edit of %s in %s: %s",
+			c.redactor.MsgID(enc.GetTargetMessageKey().GetID()), c.redactor.JID(evt.Info.Chat.String()), c.redactor.Err(err))
 		return messageChange{}, false
 	}
 	content := (&events.Message{RawMessage: decrypted}).UnwrapRaw().Message
@@ -110,7 +110,7 @@ func (c *Client) applyChange(ctx context.Context, chatJID string, chat types.JID
 	}
 	switch {
 	case err != nil:
-		c.log.Warnf("Failed to apply %s of %s in %s: %v", kind, c.redactor.MsgID(id), c.redactor.JID(chatJID), err)
+		c.log.Warnf("Failed to apply %s of %s in %s: %s", kind, c.redactor.MsgID(id), c.redactor.JID(chatJID), c.redactor.Err(err))
 	case applied:
 		c.log.Infof("Applied %s of %s in %s", kind, c.redactor.MsgID(id), c.redactor.JID(chatJID))
 	default:
@@ -209,7 +209,7 @@ func (c *Client) isGroupAdmin(ctx context.Context, group types.JID, ids ...types
 	defer cancel()
 	info, err := lookup(ctx, group)
 	if err != nil {
-		c.log.Warnf("Failed to check admins of %s: %v", c.redactor.JID(group.String()), err)
+		c.log.Warnf("Failed to check admins of %s: %s", c.redactor.JID(group.String()), c.redactor.Err(err))
 		return false
 	}
 	p := findParticipant(info, ids...)
@@ -252,7 +252,7 @@ func (c *Client) cacheChatJID(chat types.JID) string {
 // WhatsApp does not echo our own messages back to this device.
 func (c *Client) recordOwnEdit(ctx context.Context, chat types.JID, messageID, body string) {
 	if _, err := c.store.ApplyEdit(ctx, c.cacheChatJID(chat), messageID, store.Author{FromMe: true}, body, time.Now()); err != nil {
-		c.log.Warnf("Failed to record edit of %s: %v", c.redactor.MsgID(messageID), err)
+		c.log.Warnf("Failed to record edit of %s: %s", c.redactor.MsgID(messageID), c.redactor.Err(err))
 	}
 }
 
@@ -265,6 +265,6 @@ func (c *Client) recordOwnRevoke(ctx context.Context, chat types.JID, key *waPro
 		author = c.authorOf(key.GetParticipant())
 	}
 	if _, err := c.revoke(ctx, c.cacheChatJID(chat), key.GetID(), author, time.Now()); err != nil {
-		c.log.Warnf("Failed to record revoke of %s: %v", c.redactor.MsgID(key.GetID()), err)
+		c.log.Warnf("Failed to record revoke of %s: %s", c.redactor.MsgID(key.GetID()), c.redactor.Err(err))
 	}
 }
