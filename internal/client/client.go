@@ -13,6 +13,7 @@ import (
 	"github.com/mdp/qrterminal"
 
 	"go.mau.fi/whatsmeow"
+	waProto "go.mau.fi/whatsmeow/binary/proto"
 	wmstore "go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types"
@@ -64,6 +65,11 @@ type Client struct {
 	// device's LID store in tests (see mediaRetrySender).
 	mediaRetryGroupInfo func(context.Context, types.JID) (*types.GroupInfo, error)
 	mediaRetryLIDs      wmstore.LIDStore
+	// isConnected and waSend are wa's IsConnected and SendMessage, used by
+	// SendReply, SendReaction, polls and contact cards (waSend through the
+	// rate-limited sendMessage); tests replace them.
+	isConnected func() bool
+	waSend      func(context.Context, types.JID, *waProto.Message, ...whatsmeow.SendRequestExtra) (whatsmeow.SendResponse, error)
 }
 
 // newWAClient creates the whatsmeow client for device. whatsmeow logs through
@@ -163,6 +169,8 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 		downloadMedia:    wa.Download,
 		groupInfo:        wa.GetGroupInfo,
 		sendMediaRetry:   wa.SendMediaRetryReceipt,
+		isConnected:      wa.IsConnected,
+		waSend:           wa.SendMessage,
 		store:            cfg.Store,
 		log:              logger,
 		allowedMediaRoot: cfg.AllowedMediaRoot,
