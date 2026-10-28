@@ -190,3 +190,48 @@ func TestURLDownloadErrorsDoNotLeakTokensOrRetainFiles(t *testing.T) {
 		})
 	}
 }
+
+func TestURLStagingKeepsServerFilename(t *testing.T) {
+	root := t.TempDir()
+	body := append([]byte("%PDF-1.7\n"), bytes.Repeat([]byte{1}, 800)...)
+	client := &http.Client{Transport: responseTransport(func(req *http.Request) (*http.Response, error) {
+		h := http.Header{"Content-Disposition": []string{`attachment; filename="Q3-report.pdf"`}}
+		return &http.Response{StatusCode: 200, Header: h, Body: io.NopCloser(bytes.NewReader(body)), ContentLength: int64(len(body))}, nil
+	})}
+	path, cleanup, err := downloadURL(context.Background(), "https://example.com/downloads/opaque-token", root, client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	if got := filepath.Base(path); got != "Q3-report.pdf" {
+		t.Fatalf("staged name = %q, want Q3-report.pdf", got)
+	}
+}
+
+func TestStagedName(t *testing.T) {
+	for _, tc := range []struct {
+		path, disposition, kind, want string
+	}{
+		// A detected type keeps the server's or the URL's name.
+		{"/d/token", `attachment; filename="Q3-report.pdf"`, "application/pdf", "Q3-report.pdf"},
+		{"/d/token", `attachment; filename*=UTF-8''Gr%C3%BC%C3%9Fe.jpeg`, "image/jpeg", "Grüße.jpeg"},
+		{"/files/Q3-report.pdf", "", "application/pdf", "Q3-report.pdf"},
+		{"/files/IMG_0042.JPG", "", "image/jpeg", "IMG_0042.JPG"},
+		{"/files/clip.mp4", "inline", "video/mp4", "clip.mp4"},
+		// Only a missing or mismatched extension is fixed.
+		{"/d/token", `attachment; filename="Q3 report"`, "application/pdf", "Q3 report.pdf"},
+		{"/files/export.php", "", "application/pdf", "export.pdf"},
+		{"/d/token", `attachment; filename="holiday.png"`, "image/jpeg", "holiday.jpg"},
+		// "photo" only when there is no usable name: an extensionless URL
+		// segment is usually an opaque token.
+		{"/downloads/opaque-token", "", "image/jpeg", "photo.jpg"},
+		{"/", "", "image/png", "photo.png"},
+		{"/d/token", `attachment; filename=".pdf"`, "application/pdf", "photo.pdf"},
+		// Undetected types keep the name as before.
+		{"/files/notes.docx", "", "application/zip", "notes.docx"},
+	} {
+		if got := stagedName(tc.path, tc.disposition, tc.kind); got != tc.want {
+			t.Errorf("stagedName(%q, %q, %q) = %q, want %q", tc.path, tc.disposition, tc.kind, got, tc.want)
+		}
+	}
+}

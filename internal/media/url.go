@@ -121,6 +121,44 @@ func publicDial(
 	}
 }
 
+// sniffedExts lists, per detected content type, the extensions that match it;
+// the first is used when a name lacks one. The send path picks image, video,
+// audio or document from the extension, so a token-only URL still sends an
+// image, not a BIN document.
+var sniffedExts = map[string][]string{
+	"image/jpeg": {".jpg", ".jpeg"}, "image/png": {".png"}, "image/gif": {".gif"}, "image/webp": {".webp"},
+	"application/pdf": {".pdf"}, "video/mp4": {".mp4"}, "video/quicktime": {".mov"}, "audio/mpeg": {".mp3"},
+}
+
+// stagedName picks the staged file's name: the Content-Disposition filename,
+// else the URL's last path segment when it has an extension (one without is
+// usually an opaque token). For a detected type only a missing or mismatched
+// extension is fixed, and "photo" stands in when there is no usable name.
+func stagedName(urlPath, disposition, kind string) string {
+	name, named := filepath.Base(urlPath), false
+	if _, params, err := mime.ParseMediaType(disposition); err == nil && params["filename"] != "" {
+		name, named = filepath.Base(params["filename"]), true
+	}
+	exts := sniffedExts[kind]
+	if len(exts) == 0 {
+		return name
+	}
+	ext := filepath.Ext(name)
+	if !named && ext == "" || name == ext || !usableName(name) {
+		return "photo" + exts[0]
+	}
+	for _, e := range exts {
+		if strings.EqualFold(ext, e) {
+			return name
+		}
+	}
+	return strings.TrimSuffix(name, ext) + exts[0]
+}
+
+func usableName(name string) bool {
+	return name != "." && name != ".." && name != "/" && name != "" && !strings.ContainsAny(name, "\x00\\\r\n") && len(name) <= 200
+}
+
 func downloadURL(ctx context.Context, sourceURL, root string, client *http.Client) (path string, cleanup func(), err error) {
 	u, err := url.Parse(sourceURL)
 	if err != nil || len(sourceURL) > 8192 {
@@ -154,19 +192,8 @@ func downloadURL(ctx context.Context, sourceURL, root string, client *http.Clien
 	if n == 0 || kind == "text/html; charset=utf-8" {
 		return "", nil, errors.New("media URL returned an empty file or HTML page")
 	}
-	name := filepath.Base(u.Path)
-	if _, params, err := mime.ParseMediaType(resp.Header.Get("Content-Disposition")); err == nil && params["filename"] != "" {
-		name = filepath.Base(params["filename"])
-	}
-	// Sniff image extensions so a token-only URL still sends an image, not a BIN document.
-	imageExt := map[string]string{
-		"image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif", "image/webp": ".webp",
-		"application/pdf": ".pdf", "video/mp4": ".mp4", "video/quicktime": ".mov", "audio/mpeg": ".mp3",
-	}
-	if ext := imageExt[kind]; ext != "" {
-		name = "photo" + ext
-	}
-	if name == "." || name == ".." || name == "/" || name == "" || strings.ContainsAny(name, "\x00\\\r\n") || len(name) > 200 {
+	name := stagedName(u.Path, resp.Header.Get("Content-Disposition"), kind)
+	if !usableName(name) {
 		name = "attachment.bin"
 	}
 	dir, err := os.MkdirTemp(root, ".media-url-*")

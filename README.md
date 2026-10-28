@@ -5,6 +5,8 @@ or `source_url` (a public HTTPS link to the file itself). URL imports are capped
 64 MiB and 60 seconds, reject private network destinations and unsafe redirects,
 and use no proxy, cookies or credentials. The temporary file is removed after the
 send attempt. Image bytes are detected even when the URL has no file extension.
+The file keeps its name from `Content-Disposition` or the URL; only a missing or
+mismatched extension is corrected for a detected type.
 For one-time links, pass the link straight to `source_url` without previewing it;
 if an attempt consumes it before a failed send, obtain a fresh link. Never repeat
 a send whose delivery is uncertain. Existing send approvals and rate limits apply.
