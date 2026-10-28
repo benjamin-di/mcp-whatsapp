@@ -46,6 +46,7 @@ type Client struct {
 	wa               *whatsmeow.Client
 	downloadMedia    func(context.Context, whatsmeow.DownloadableMessage) ([]byte, error)
 	groupInfo        func(context.Context, types.JID) (*types.GroupInfo, error)
+	sendMediaRetry   func(context.Context, *types.MessageInfo, []byte) error
 	store            *store.Store
 	log              waLog.Logger
 	handlerID        uint32
@@ -53,6 +54,16 @@ type Client struct {
 	allowedMediaRoot string
 	redactor         *security.Redactor
 	limiter          *ratelimit.Limiter
+
+	// mediaRetries tracks media retry receipts awaiting the phone's answer
+	// (see mediaretry.go); mediaRetryTimeout overrides
+	// defaultMediaRetryTimeout when positive.
+	mediaRetries      mediaRetryRegistry
+	mediaRetryTimeout time.Duration
+	// mediaRetryGroupInfo and mediaRetryLIDs replace wa.GetGroupInfo and the
+	// device's LID store in tests (see mediaRetrySender).
+	mediaRetryGroupInfo func(context.Context, types.JID) (*types.GroupInfo, error)
+	mediaRetryLIDs      wmstore.LIDStore
 }
 
 // New constructs a Client. It sets the latest WhatsApp version best-effort,
@@ -145,6 +156,7 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 		wa:               wa,
 		downloadMedia:    wa.Download,
 		groupInfo:        wa.GetGroupInfo,
+		sendMediaRetry:   wa.SendMediaRetryReceipt,
 		store:            cfg.Store,
 		log:              logger,
 		allowedMediaRoot: cfg.AllowedMediaRoot,
