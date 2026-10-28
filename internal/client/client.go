@@ -51,10 +51,11 @@ type Client struct {
 	redactor         *security.Redactor
 	limiter          *ratelimit.Limiter
 
-	// isConnected and sendMessage are wa's, used by SendReply and
-	// SendReaction; tests replace them.
+	// isConnected and waSend are wa's IsConnected and SendMessage, used by
+	// SendReply, SendReaction, polls and contact cards (waSend through the
+	// rate-limited sendMessage); tests replace them.
 	isConnected func() bool
-	sendMessage func(context.Context, types.JID, *waProto.Message, ...whatsmeow.SendRequestExtra) (whatsmeow.SendResponse, error)
+	waSend      func(context.Context, types.JID, *waProto.Message, ...whatsmeow.SendRequestExtra) (whatsmeow.SendResponse, error)
 }
 
 // New constructs a Client. It sets the latest WhatsApp version best-effort,
@@ -134,7 +135,7 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 		wa:               wa,
 		downloadMedia:    wa.Download,
 		isConnected:      wa.IsConnected,
-		sendMessage:      wa.SendMessage,
+		waSend:           wa.SendMessage,
 		store:            cfg.Store,
 		log:              logger,
 		allowedMediaRoot: cfg.AllowedMediaRoot,

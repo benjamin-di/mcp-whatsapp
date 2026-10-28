@@ -88,8 +88,8 @@ func (c *Client) MarkChatRead(ctx context.Context, chatJID string, limit int) (i
 }
 
 // SendReaction adds (or clears, if emoji is empty) a reaction to a message.
-// It goes through the send rate limiter like any other send: the reaction
-// reaches the recipient's devices as a message.
+// It goes through the send rate limiter (sendMessage) like any other send:
+// the reaction reaches the recipient's devices as a message.
 func (c *Client) SendReaction(ctx context.Context, chatJID, messageID, senderJID, emoji string) error {
 	if !c.isConnected() {
 		return errors.New("not connected to WhatsApp")
@@ -104,9 +104,6 @@ func (c *Client) SendReaction(ctx context.Context, chatJID, messageID, senderJID
 		if err != nil {
 			return fmt.Errorf("invalid sender JID: %w", err)
 		}
-	}
-	if err := c.checkSendRate(ctx, chat); err != nil {
-		return err
 	}
 
 	reaction := c.wa.BuildReaction(chat, sender, types.MessageID(messageID), emoji)
@@ -135,9 +132,6 @@ func (c *Client) SendReply(ctx context.Context, chatJID, targetMessageID, target
 		}
 		// ContextInfo.Participant expects a JID string for group quotes.
 		participant = sender.ToNonAD().String()
-	}
-	if err := c.checkSendRate(ctx, chat); err != nil {
-		return err
 	}
 
 	ctxInfo := &waProto.ContextInfo{

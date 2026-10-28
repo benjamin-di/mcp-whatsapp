@@ -6,14 +6,17 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"go.mau.fi/whatsmeow"
 	waProto "go.mau.fi/whatsmeow/binary/proto"
+	"go.mau.fi/whatsmeow/proto/waAdv"
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types"
 	waLog "go.mau.fi/whatsmeow/util/log"
 
 	"github.com/sealjay/mcp-whatsapp/internal/ratelimit"
+	"github.com/sealjay/mcp-whatsapp/internal/store"
 )
 
 // newOfflinePairedClient returns a connected-looking Client with a message
@@ -41,7 +44,7 @@ func newOfflinePairedClient(t *testing.T, limiter *ratelimit.Limiter) (*Client, 
 	c.limiter = limiter
 	c.isConnected = func() bool { return true }
 	sent := &[]sentMessage{}
-	c.sendMessage = func(_ context.Context, to types.JID, msg *waProto.Message, _ ...whatsmeow.SendRequestExtra) (whatsmeow.SendResponse, error) {
+	c.waSend = func(_ context.Context, to types.JID, msg *waProto.Message, _ ...whatsmeow.SendRequestExtra) (whatsmeow.SendResponse, error) {
 		*sent = append(*sent, sentMessage{to: to, msg: msg})
 		return whatsmeow.SendResponse{ID: types.MessageID(fmt.Sprintf("SENT-%d", len(*sent)))}, nil
 	}
@@ -181,5 +184,80 @@ func TestSendReplyAndReaction_NotConnected(t *testing.T) {
 	assertNotConnected(t, c.SendReaction(context.Background(), "447700000001", "a1", "", "👍"))
 	if len(*sent) != 0 {
 		t.Fatalf("sent %d messages while not connected, want 0", len(*sent))
+	}
+}
+
+// assertRateLimited checks that a second send within the send interval was
+// refused by the limiter, sent nothing, and that the override still sends.
+func assertRateLimited(t *testing.T, sent *[]sentMessage, send func(context.Context) SendResult) {
+	t.Helper()
+	ctx := context.Background()
+	if r := send(ctx); !r.Success {
+		t.Fatalf("first send: %s", r.Message)
+	}
+	r := send(ctx)
+	if r.Success || !strings.Contains(r.Message, "rate limited") {
+		t.Fatalf("second send within the send interval: %+v, want rate limited", r)
+	}
+	if len(*sent) != 1 {
+		t.Fatalf("sent %d messages, want 1", len(*sent))
+	}
+	if r := send(ratelimit.WithBypass(ctx)); !r.Success {
+		t.Fatalf("send with the override: %s", r.Message)
+	}
+	if len(*sent) != 2 {
+		t.Fatalf("sent %d messages, want 2", len(*sent))
+	}
+}
+
+func TestSendPoll_GoesThroughRateLimiter(t *testing.T) {
+	c, sent := newOfflinePairedClient(t, ratelimit.New(ratelimit.DefaultConfig()))
+	assertRateLimited(t, sent, func(ctx context.Context) SendResult {
+		return c.SendPoll(ctx, "447700000001", "Lunch?", []string{"Yes", "No"}, 1)
+	})
+	if (*sent)[0].msg.GetPollCreationMessageV3() == nil && (*sent)[0].msg.GetPollCreationMessage() == nil {
+		t.Errorf("sent %v, want a poll", (*sent)[0].msg)
+	}
+}
+
+func TestSendPollVote_GoesThroughRateLimiter(t *testing.T) {
+	c, sent := newOfflinePairedClient(t, ratelimit.New(ratelimit.DefaultConfig()))
+	ctx := context.Background()
+	const chat = "447700000001@s.whatsapp.net"
+	// A poll received from 447700000001: its cached row and the message
+	// secret BuildPollVote encrypts the vote with.
+	if err := c.store.StoreChat(chat, "Alex", time.Now()); err != nil {
+		t.Fatalf("StoreChat: %v", err)
+	}
+	if err := c.store.StoreMessage(ctx, store.Message{
+		ID: "POLL-1", ChatJID: chat, Sender: "447700000001", Content: "Lunch?", Timestamp: time.Now(),
+	}, nil, nil, nil, 0); err != nil {
+		t.Fatalf("StoreMessage: %v", err)
+	}
+	// Message secrets belong to a saved device row.
+	c.wa.Store.Account = &waAdv.ADVSignedDeviceIdentity{Details: []byte{}, AccountSignature: make([]byte, 64), AccountSignatureKey: make([]byte, 32), DeviceSignature: make([]byte, 64)}
+	if err := c.wa.Store.Save(ctx); err != nil {
+		t.Fatalf("save device: %v", err)
+	}
+	pollSender := types.NewJID("447700000001", types.DefaultUserServer)
+	if err := c.wa.Store.MsgSecrets.PutMessageSecret(ctx, pollSender, pollSender, "POLL-1", make([]byte, 32)); err != nil {
+		t.Fatalf("PutMessageSecret: %v", err)
+	}
+
+	assertRateLimited(t, sent, func(ctx context.Context) SendResult {
+		return c.SendPollVote(ctx, chat, "POLL-1", []string{"Yes"})
+	})
+	if (*sent)[0].msg.GetPollUpdateMessage() == nil {
+		t.Errorf("sent %v, want a poll vote", (*sent)[0].msg)
+	}
+}
+
+func TestSendContactCard_GoesThroughRateLimiter(t *testing.T) {
+	c, sent := newOfflinePairedClient(t, ratelimit.New(ratelimit.DefaultConfig()))
+	assertRateLimited(t, sent, func(ctx context.Context) SendResult {
+		return c.SendContactCard(ctx, "447700000001", "Alex Example", "+447700900002", "")
+	})
+	if got := (*sent)[0].msg.GetContactMessage().GetDisplayName(); got != "Alex Example" {
+		t.Errorf("contact card display name = %q, want %q", got, "Alex Example")
 	}
 }
