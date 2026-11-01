@@ -15,6 +15,7 @@ import (
 	"go.mau.fi/whatsmeow"
 	wmstore "go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/store/sqlstore"
+	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	waLog "go.mau.fi/whatsmeow/util/log"
 
@@ -44,6 +45,7 @@ type Config struct {
 type Client struct {
 	wa               *whatsmeow.Client
 	downloadMedia    func(context.Context, whatsmeow.DownloadableMessage) ([]byte, error)
+	groupInfo        func(context.Context, types.JID) (*types.GroupInfo, error)
 	store            *store.Store
 	log              waLog.Logger
 	handlerID        uint32
@@ -142,6 +144,7 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	return &Client{
 		wa:               wa,
 		downloadMedia:    wa.Download,
+		groupInfo:        wa.GetGroupInfo,
 		store:            cfg.Store,
 		log:              logger,
 		allowedMediaRoot: cfg.AllowedMediaRoot,
