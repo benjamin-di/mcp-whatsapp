@@ -36,20 +36,77 @@ type SendMediaOptions struct {
 	ViewOnce  bool
 }
 
+// ValidClientMessageID reports whether id is a safe caller-supplied WhatsApp
+// message ID (1-64 ASCII characters from [A-Za-z0-9._:-]).
+func ValidClientMessageID(id string) bool {
+	if len(id) == 0 || len(id) > 64 {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		ch := id[i]
+		if !((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') ||
+			ch == '.' || ch == '_' || ch == ':' || ch == '-') {
+			return false
+		}
+	}
+	return true
+}
+
 // Send sends a text message.
 func (c *Client) Send(ctx context.Context, recipient, message string) SendResult {
-	return c.send(ctx, recipient, message, "", false)
+	return c.send(ctx, recipient, message, "", false, "")
+}
+
+// SendWithID sends a text message with an optional caller-supplied message ID.
+func (c *Client) SendWithID(ctx context.Context, recipient, message, clientMessageID string) SendResult {
+	return c.send(ctx, recipient, message, "", false, clientMessageID)
 }
 
 // SendMediaWithOptions is the extensible entry point for media sends.
 func (c *Client) SendMediaWithOptions(ctx context.Context, opts SendMediaOptions) SendResult {
-	return c.send(ctx, opts.Recipient, opts.Caption, opts.MediaPath, opts.ViewOnce)
+	return c.send(ctx, opts.Recipient, opts.Caption, opts.MediaPath, opts.ViewOnce, "")
 }
 
-// send is the unified implementation shared by Send and SendMediaWithOptions.
-func (c *Client) send(ctx context.Context, recipient, message, mediaPath string, viewOnce bool) SendResult {
-	if !c.wa.IsConnected() {
+// send is the unified implementation shared by Send, SendWithID and SendMediaWithOptions.
+func (c *Client) send(ctx context.Context, recipient, message, mediaPath string, viewOnce bool, clientMessageID string) SendResult {
+	connected := c.isConnected
+	if connected == nil && c.wa != nil {
+		connected = c.wa.IsConnected
+	}
+	if connected == nil || !connected() {
 		return SendResult{Success: false, Message: "Not connected to WhatsApp"}
+	}
+
+	if clientMessageID != "" && !ValidClientMessageID(clientMessageID) {
+		return SendResult{Success: false, Message: "invalid client_message_id"}
+	}
+
+	if clientMessageID != "" {
+		c.clientMsgIDMu.Lock()
+		if c.inFlightClientIDs == nil {
+			c.inFlightClientIDs = make(map[string]struct{})
+		}
+		if _, busy := c.inFlightClientIDs[clientMessageID]; busy {
+			c.clientMsgIDMu.Unlock()
+			return SendResult{Success: false, Message: "client_message_id already in flight"}
+		}
+		c.inFlightClientIDs[clientMessageID] = struct{}{}
+		c.clientMsgIDMu.Unlock()
+		defer func() {
+			c.clientMsgIDMu.Lock()
+			delete(c.inFlightClientIDs, clientMessageID)
+			c.clientMsgIDMu.Unlock()
+		}()
+
+		if c.store != nil {
+			exists, err := c.store.HasMessageID(ctx, clientMessageID)
+			if err != nil {
+				return SendResult{Success: false, Message: fmt.Sprintf("check client_message_id: %v", err)}
+			}
+			if exists {
+				return SendResult{Success: false, Message: "client_message_id already exists"}
+			}
+		}
 	}
 
 	recipientJID, err := parseRecipient(recipient)
@@ -74,7 +131,15 @@ func (c *Client) send(ctx context.Context, recipient, message, mediaPath string,
 		msg.Conversation = proto.String(message)
 	}
 
-	resp, err := c.wa.SendMessage(ctx, recipientJID, msg)
+	sendFn := c.waSend
+	if sendFn == nil {
+		sendFn = c.wa.SendMessage
+	}
+	var extra []whatsmeow.SendRequestExtra
+	if clientMessageID != "" {
+		extra = []whatsmeow.SendRequestExtra{{ID: types.MessageID(clientMessageID)}}
+	}
+	resp, err := sendFn(ctx, recipientJID, msg, extra...)
 	if err != nil {
 		return SendResult{Success: false, Message: fmt.Sprintf("Error sending message: %v", err)}
 	}
@@ -131,8 +196,15 @@ func (c *Client) ephemeralContextInfo(ctx context.Context, chat types.JID) *waPr
 	if chat.Server != "g.us" {
 		return nil
 	}
-	gi, err := c.wa.GetGroupInfo(ctx, chat)
-	if err != nil || gi.DisappearingTimer == 0 {
+	getGroupInfo := c.groupInfo
+	if getGroupInfo == nil && c.wa != nil {
+		getGroupInfo = c.wa.GetGroupInfo
+	}
+	if getGroupInfo == nil {
+		return nil
+	}
+	gi, err := getGroupInfo(ctx, chat)
+	if err != nil || gi == nil || gi.DisappearingTimer == 0 {
 		return nil
 	}
 	c.log.Infof("Auto-detected group disappearing timer: %d seconds", gi.DisappearingTimer)
@@ -351,7 +423,7 @@ func (c *Client) persistSent(ctx context.Context, recipientJID types.JID, msgID,
 	}
 
 	ourJID := ""
-	if c.wa.Store.ID != nil {
+	if c.wa != nil && c.wa.Store != nil && c.wa.Store.ID != nil {
 		ourJID = c.wa.Store.ID.User
 	}
 

@@ -1,10 +1,12 @@
 package client
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	"go.mau.fi/whatsmeow"
+	waProto "go.mau.fi/whatsmeow/binary/proto"
 	"go.mau.fi/whatsmeow/types"
 )
 
@@ -122,5 +124,107 @@ func TestMediaTypeFromExtDocuments(t *testing.T) {
 		if got != want {
 			t.Errorf("%s: mime = %q, want %q", path, got, want)
 		}
+	}
+}
+
+func TestSendWithID_PassesExtraIDAndPersists(t *testing.T) {
+	c, _ := newOfflinePairedClient(t, nil)
+	var gotExtra []whatsmeow.SendRequestExtra
+	c.waSend = func(_ context.Context, _ types.JID, _ *waProto.Message, extra ...whatsmeow.SendRequestExtra) (whatsmeow.SendResponse, error) {
+		gotExtra = append([]whatsmeow.SendRequestExtra(nil), extra...)
+		id := types.MessageID("AUTO-1")
+		if len(extra) > 0 && extra[0].ID != "" {
+			id = extra[0].ID
+		}
+		return whatsmeow.SendResponse{ID: id}, nil
+	}
+
+	ctx := context.Background()
+	const clientID = "3EB0ABCDEF0123456789ABCDEF012345"
+	res := c.SendWithID(ctx, "447700000001@s.whatsapp.net", "hello with id", clientID)
+	if !res.Success {
+		t.Fatalf("SendWithID failed: %s", res.Message)
+	}
+	if res.ID != clientID {
+		t.Fatalf("res.ID = %q, want %q", res.ID, clientID)
+	}
+	if len(gotExtra) != 1 || gotExtra[0].ID != types.MessageID(clientID) {
+		t.Fatalf("gotExtra = %+v, want single SendRequestExtra with ID %q", gotExtra, clientID)
+	}
+	if _, err := c.store.GetMessageContext(ctx, clientID, 1, 1); err != nil {
+		t.Fatalf("sent message with client ID not persisted in store: %v", err)
+	}
+
+	// Empty client_message_id preserves default behavior (no SendRequestExtra).
+	gotExtra = nil
+	res2 := c.SendWithID(ctx, "447700000001@s.whatsapp.net", "hello default", "")
+	if !res2.Success || res2.ID != "AUTO-1" {
+		t.Fatalf("SendWithID empty ID: got %+v, want Success with AUTO-1", res2)
+	}
+	if len(gotExtra) != 0 {
+		t.Fatalf("empty client_message_id passed unexpected extra: %+v", gotExtra)
+	}
+}
+
+func TestSendWithID_RejectsInvalidClientMessageID(t *testing.T) {
+	c, _ := newOfflinePairedClient(t, nil)
+	called := false
+	c.waSend = func(_ context.Context, _ types.JID, _ *waProto.Message, _ ...whatsmeow.SendRequestExtra) (whatsmeow.SendResponse, error) {
+		called = true
+		return whatsmeow.SendResponse{ID: "SHOULD-NOT-SEND"}, nil
+	}
+	for _, bad := range []string{"bad id", "bad\nid", "bad]id", strings.Repeat("A", 65)} {
+		res := c.SendWithID(context.Background(), "447700000001@s.whatsapp.net", "hello", bad)
+		if res.Success {
+			t.Errorf("SendWithID(%q) succeeded, want failure", bad)
+		}
+		if called {
+			t.Errorf("SendWithID(%q) called waSend despite invalid ID", bad)
+		}
+	}
+}
+
+func TestSendWithID_RefusesReusedAndInFlightID(t *testing.T) {
+	c, _ := newOfflinePairedClient(t, nil)
+	sendCount := 0
+	c.waSend = func(_ context.Context, _ types.JID, _ *waProto.Message, extra ...whatsmeow.SendRequestExtra) (whatsmeow.SendResponse, error) {
+		sendCount++
+		return whatsmeow.SendResponse{ID: extra[0].ID}, nil
+	}
+
+	ctx := context.Background()
+	const clientID = "3EB0REUSE0123456789ABCDEF0123456"
+	first := c.SendWithID(ctx, "447700000001@s.whatsapp.net", "original body", clientID)
+	if !first.Success {
+		t.Fatalf("first SendWithID failed: %s", first.Message)
+	}
+
+	// Reusing the same client_message_id must fail without calling waSend or overwriting history.
+	dup := c.SendWithID(ctx, "447700000002@s.whatsapp.net", "conflicting body", clientID)
+	if dup.Success {
+		t.Fatalf("duplicate SendWithID succeeded, want refusal")
+	}
+	if sendCount != 1 {
+		t.Fatalf("sendCount = %d, want 1", sendCount)
+	}
+	mc, err := c.store.GetMessageContext(ctx, clientID, 0, 0)
+	if err != nil {
+		t.Fatalf("GetMessageContext: %v", err)
+	}
+	if mc.Message.Content != "original body" {
+		t.Fatalf("stored content = %q, want %q", mc.Message.Content, "original body")
+	}
+
+	// An in-flight client_message_id must be refused before calling waSend.
+	const inflightID = "3EB0INFLIGHT1234567890ABCDEF0123"
+	c.clientMsgIDMu.Lock()
+	c.inFlightClientIDs = map[string]struct{}{inflightID: {}}
+	c.clientMsgIDMu.Unlock()
+	res := c.SendWithID(ctx, "447700000001@s.whatsapp.net", "concurrent body", inflightID)
+	if res.Success || !strings.Contains(res.Message, "in flight") {
+		t.Fatalf("in-flight SendWithID = %+v, want in-flight refusal", res)
+	}
+	if sendCount != 1 {
+		t.Fatalf("sendCount after in-flight refusal = %d, want 1", sendCount)
 	}
 }

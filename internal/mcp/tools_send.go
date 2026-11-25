@@ -27,9 +27,10 @@ func (s *Server) registerSendTools() {
 // -- send_message -----------------------------------------------------------
 
 type sendMessageArgs struct {
-	Recipient    string `json:"recipient"`
-	Message      string `json:"message"`
-	MarkChatRead bool   `json:"mark_chat_read,omitempty"`
+	Recipient       string `json:"recipient"`
+	Message         string `json:"message"`
+	MarkChatRead    bool   `json:"mark_chat_read,omitempty"`
+	ClientMessageID string `json:"client_message_id,omitempty"`
 }
 
 func (s *Server) registerSendMessage() {
@@ -38,6 +39,7 @@ func (s *Server) registerSendMessage() {
 		mcp.WithString("recipient", mcp.Required(), mcp.Description(recipientDesc)),
 		mcp.WithString("message", mcp.Required(), mcp.Description("message body text")),
 		mcp.WithBoolean("mark_chat_read", mcp.DefaultBool(false), mcp.Description("if true, also ack recent incoming messages in the chat to clear the unread badge (defaults to false)")),
+		mcp.WithString("client_message_id", mcp.Description("optional caller-supplied WhatsApp message ID for idempotent delivery reconciliation (1-64 characters: letters, digits, ., _, :, -)")),
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(false),
@@ -47,8 +49,11 @@ func (s *Server) registerSendMessage() {
 		if a.Recipient == "" {
 			return mcp.NewToolResultError("recipient must be provided"), nil
 		}
+		if a.ClientMessageID != "" && !client.ValidClientMessageID(a.ClientMessageID) {
+			return mcp.NewToolResultError("invalid client_message_id"), nil
+		}
 		ctx = withRateLimitOverride(ctx, req)
-		r := s.client.Send(ctx, a.Recipient, a.Message)
+		r := s.client.SendWithID(ctx, a.Recipient, a.Message, a.ClientMessageID)
 		s.maybeMarkChatRead(ctx, r, a.Recipient, a.MarkChatRead)
 		return resultJSON(r)
 	}))
