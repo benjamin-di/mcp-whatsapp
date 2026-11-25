@@ -253,6 +253,20 @@ func (s *Store) UpdateMediaDirectPath(id, chatJID, directPath string) error {
 	return nil
 }
 
+// HasMessageID reports whether any chat in the local store already has a
+// message with the given ID.
+func (s *Store) HasMessageID(ctx context.Context, messageID string) (bool, error) {
+	var exists int
+	err := s.db.QueryRowContext(ctx, "SELECT 1 FROM messages WHERE id = ? LIMIT 1", messageID).Scan(&exists)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // GetMessageOrigin returns the cached sender (user part, LID-resolved where
 // possible) and from-me flag of a message: the key fields a media retry
 // receipt needs besides the message and chat IDs.
